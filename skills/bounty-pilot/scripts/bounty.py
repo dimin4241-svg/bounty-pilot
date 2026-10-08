@@ -539,6 +539,50 @@ def _fenced(path, text):
     return f'### {path}\n\n{fence}{language}\n{text.rstrip()}\n{fence}\n'
 
 
+TESTS_BUDGET_BYTES = 600_000
+
+
+def _relevant_tests(root, all_tests, in_scope, scope_prefixes):
+    """Keep only the tests that plausibly cover the scoped source.
+
+    Bundling every test file in the repository defeats the point of --scope: on a repo with a
+    hundred test files the coverage-gap bundle becomes too large to read, which is the one thing
+    a lens must not be handed.
+    """
+    if not scope_prefixes:
+        return all_tests, []
+    stems = {Path(p).stem.lower() for p in in_scope if Path(p).stem}
+    kept, omitted, used = [], [], 0
+    for path in all_tests:
+        reason = None
+        if any(path.startswith(prefix) for prefix in scope_prefixes):
+            reason = 'under a scope prefix'
+        else:
+            name = Path(path).stem.lower()
+            if any(stem in name or name.replace('.t', '') in stems for stem in stems):
+                reason = 'filename matches an in-scope source file'
+            else:
+                try:
+                    text = (root / path).read_text(encoding='utf-8', errors='replace')
+                except OSError:
+                    text = ''
+                if any(stem in text.lower() for stem in stems):
+                    reason = 'mentions an in-scope source file'
+        if reason is None:
+            omitted.append(path)
+            continue
+        try:
+            size = (root / path).stat().st_size
+        except OSError:
+            size = 0
+        if used + size > TESTS_BUDGET_BYTES:
+            omitted.append(path)
+            continue
+        used += size
+        kept.append(path)
+    return kept, omitted
+
+
 def _collect(root, paths):
     parts, skipped = [], []
     for path in paths:
@@ -585,7 +629,8 @@ def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
     in_scope = [p for p in tracked if Path(p).suffix in SOURCE_SUFFIXES
                 and not _is_test_path(p)
                 and (not scope_prefixes or any(p.startswith(s) for s in scope_prefixes))]
-    test_paths = [p for p in tracked if Path(p).suffix in SOURCE_SUFFIXES and _is_test_path(p)]
+    all_tests = [p for p in tracked if Path(p).suffix in SOURCE_SUFFIXES and _is_test_path(p)]
+    test_paths, tests_omitted = _relevant_tests(root, all_tests, in_scope, scope_prefixes)
 
     out = run / 'bundles'
     out.mkdir(parents=True, exist_ok=True)
@@ -594,8 +639,11 @@ def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
     (out / 'source.md').write_text(source_doc, encoding='utf-8')
     tests, _ = _collect(root, test_paths)
     tests_doc = (f'# Tests, mocks and fixtures ({len(test_paths)} files)\n\n'
-                 'Read these as evidence of what the authors believed, not as code to audit.\n\n'
-                 + tests)
+                 'Read these as evidence of what the authors believed, not as code to audit.\n'
+                 + (f'\n{len(tests_omitted)} further test file(s) were omitted as unrelated to the '
+                    'scoped source or over the size budget; read them from the repository if a '
+                    'trail leads there.\n' if tests_omitted else '')
+                 + '\n' + tests)
     (out / 'tests.md').write_text(tests_doc, encoding='utf-8')
 
     context = []
@@ -686,6 +734,7 @@ def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
         notes.append('no in-scope source matched; check --scope and the tracked file list')
     return {'target': str(root), 'commit': commit, 'run': str(run),
             'in_scope_files': len(in_scope), 'test_files_bundled_for_coverage_gap': len(test_paths),
+            'test_files_omitted': len(tests_omitted),
             'context_sections': len(context), 'bundles': written, 'notes': notes,
             'dispatch': 'Give each bundle to its own agent, in its own context. Record in '
                         'coverage.md which lenses actually ran.'}

@@ -697,6 +697,29 @@ class BundleTests(unittest.TestCase):
         self.assertIn('contract VaultTest', gap)
         self.assertNotIn('contract VaultTest', acc)
 
+    def test_scoped_bundles_only_carry_the_relevant_tests(self):
+        # Bundling every test file in the repo defeats --scope: a real target with 105 test files
+        # produced a 1.7 MB coverage-gap bundle, too large for a lens to read.
+        (self.repo / 'test/Unrelated.t.sol').write_text('contract UnrelatedTest { Other o; }\n')
+        (self.repo / 'test/Mentions.t.sol').write_text('// exercises Vault indirectly\ncontract M {}\n')
+        commit(self.repo, 'more tests')
+        result = bounty.bundle(self.repo, self.run, ['coverage-gap'],
+                               scope_prefixes=['src/'])
+        text = (self.run / 'bundles/coverage-gap-bundle.md').read_text()
+        self.assertIn('contract VaultTest', text)          # filename matches src/Vault.sol
+        self.assertIn('exercises Vault indirectly', text)  # mentions an in-scope stem
+        self.assertNotIn('contract UnrelatedTest', text)   # neither -> omitted
+        self.assertEqual(result['test_files_omitted'], 1)
+        self.assertIn('omitted', text)                     # the omission is disclosed in the bundle
+
+    def test_unscoped_bundles_still_carry_every_test(self):
+        (self.repo / 'test/Unrelated.t.sol').write_text('contract UnrelatedTest { Other o; }\n')
+        commit(self.repo, 'more tests')
+        result = bounty.bundle(self.repo, self.run, ['coverage-gap'])
+        self.assertEqual(result['test_files_omitted'], 0)
+        self.assertIn('contract UnrelatedTest',
+                      (self.run / 'bundles/coverage-gap-bundle.md').read_text())
+
     def test_test_files_are_never_in_the_in_scope_source(self):
         bounty.bundle(self.repo, self.run, ['accounting'])
         source = (self.run / 'bundles/source.md').read_text()
