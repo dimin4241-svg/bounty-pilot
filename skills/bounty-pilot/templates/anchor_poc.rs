@@ -71,8 +71,15 @@ fn substituted_account_is_accepted() {
 
 #[test]
 fn control_correct_account_path() {
-    // The negative control: the same instruction with the account the program intended.
-    // It must succeed with the correct outcome, proving the harness builds valid instructions and
-    // that the first test's success comes from the substitution and nothing else.
+    // The negative control: the same instruction with the account the program INTENDED.
+    // It must succeed with the correct outcome, which proves two things the finding depends on:
+    // the harness builds valid instructions, and the first test's success comes from the
+    // substitution and nothing else.
+    //
+    // This panics until you fill it in, on purpose. An empty control test passes, and a passing
+    // empty control is worse than no control: it looks like evidence in the record and in the
+    // report while establishing nothing. evidence.negative_control must describe a run you
+    // actually observed.
     let (mut _svm, _attacker) = setup();
+    unimplemented!("fill the control: same instruction, intended account, assert the correct state");
 }

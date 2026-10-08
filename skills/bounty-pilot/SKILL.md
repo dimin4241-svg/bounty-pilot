@@ -1,6 +1,6 @@
 ---
 name: bounty-pilot
-description: Run an evidence-driven Web3 bug bounty hunt from a repository URL or local checkout. Use for Bounty Pilot, bounty hunting, choosing a bounty target, Solidity/EVM security review, Rust/Solana review, audit loop or loop mode, post-audit delta review, validating or refuting a finding, checking whether deployed bytecode matches the source, duplicate and known-issue checks, and preparing a private bounty report. Coordinates target triage, scope and duplicate mapping, parallel lens passes, adversarial adjudication, reproducible local PoCs and submission gating.
+description: Run an evidence-driven Web3 bug bounty hunt from a repository URL or local checkout. Use for Bounty Pilot, bounty hunting, choosing a bounty target, Solidity/EVM security review, Rust/Solana review, audit loop or loop mode, post-audit delta review, validating or refuting a finding, adversarial triage of a candidate, checking whether deployed bytecode matches the source, duplicate and known-issue checks, severity and impact-class placement, and preparing a private bounty report. Coordinates target triage, scope and duplicate mapping, bundled parallel lens passes, a two-round objection exchange, reproducible local PoCs and submission gating.
 ---
 # Bounty Pilot
 
@@ -73,35 +73,68 @@ is safe because it is excluded.
 
 ## Stage 3 — Hunt
 
-Read `references/passes.md`, then `references/hunt-agents/_shared.md` and the lens files that pass
-needs. Dispatch each pass's lenses in parallel, independent contexts where the runtime allows, at
-most four concurrent by default; otherwise run sequentially and disclose the lost independence.
+Read `references/passes.md` first; it settles the aiming, the dispatch mechanics and the stop rules.
+Recall is driven by the number of **independent** adversarial readings, so the bundles and the
+separate contexts are not ceremony.
 
-- Pass 1 aims: `delta`, `upstream-diff`, `coverage-gap` → a ranked surface list.
-- Pass 2 attacks: `accounting`, `integration-auth`, `liveness` (+ `anchor-account` for Solana).
-- Pass 3 verifies reality and seams: `live-reality`, plus one seam agent over passes 1–2 output.
+**Aim, cheaply.** Dispatch `delta`, `upstream-diff` and `coverage-gap` — one agent each. Their
+product is a ranked reading order in `coverage.md`, not findings.
 
-During a hunt pass, agents do not refute themselves — that is stage 4's job, and it needs the claim
-at full strength. After every pass, append the investigated mechanisms to `known-hypotheses.md`
-(including the ones you looked for and did not find) and update `coverage.md`. Later passes must hunt
-mechanisms that file does not name.
+**Attack.** Assemble the bundles, then dispatch one agent per bundle in its own context, at most
+four concurrent by default:
+
+```sh
+python3 <skill-dir>/scripts/bounty.py bundle --repo <checkout> --run <run> \
+    --lens attack --scope src/ --include <run>/delta.json
+```
+
+Each bundle holds the SOP, the shared rules, that lens's procedure, the run context and all in-scope
+source. A pass that skipped `bundle` handed its lenses less than they needed. Add
+`--lens anchor-account` for Solana or Rust. Where budget allows, dispatch each mechanism lens
+**twice in independent contexts** — the cheapest recall increase available.
+
+Pass 2 repeats the mechanism lenses with `known-hypotheses.md` now in the bundle, so each hunts past
+its own earlier output, and adds `--lens seam` over both passes' records — including the demoted and
+refuted ones, whose refusals the seam lens is told to reconstruct.
+
+Hunt agents never refute themselves; that is stage 4, and it needs the claim at full strength. After
+every pass append the investigated mechanisms to `known-hypotheses.md` — including the ones you
+looked for and did not find — and record in `coverage.md` which lenses actually ran and how many
+readings each got. A lens you could not dispatch is reported, never silently skipped.
 
 For the classic Solidity bug-class sweep, prefer delegating to `solidity-auditor` in loop mode when
 it is installed, and spend your own passes on the aimed lenses it has no equivalent for. Read
 `references/compare.md` for the division of labour and the import rules. Do not nest orchestrators.
 
 Stop at the pass budget, or after two consecutive passes produce neither a new mechanism nor new
-coverage. There is no finding quota; zero verified findings after three honest passes is a result.
+coverage. There is no finding quota; zero verified findings after an honest run is a result.
 
-## Stage 4 — Adjudicate
+## Stage 4 — Adjudicate: two rounds, both sides carrying evidence
 
-Read `references/adjudicate.md` and run it as a separate pass, in a fresh context where possible.
-Every candidate meets five gates: interruption, reachability, trigger, material harm, eligibility.
-An objection with no anchor in code, specification, test or live read is not a refutation. Nothing is
-deleted — a refuted record with a cited reason is what makes the next scan cheap.
+Read `references/adjudicate.md`. Refutation is an adversarial exchange, not a review, because a
+one-round review holds the finding to an evidence standard and the objection to none — and an agent
+allowed to reject on "probably intended" rejects almost everything.
 
-Record one entry per root cause in `findings.json` per `references/evidence.md`. Keep technical
-validity, severity, eligibility and novelty as four separate judgments.
+**Round 1.** Dispatch a triage agent in its own context, instructed to reject:
+
+```sh
+python3 <skill-dir>/scripts/bounty.py bundle --repo <checkout> --run <run> --lens triage
+```
+
+It gets the records, the source, the dup map and the impact ladder — never the hunt stance. It emits
+anchored `OBJECTION` blocks and explicit `CONCEDED` blocks, where an anchor is quoted code, quoted
+specification, a named test, or a live chain read.
+
+**Round 2.** Answer every objection, with its own anchor. `answered` needs `answer` and
+`answer_anchor`; an anchored objection with an unanchored answer is `sustained` and the gate fails;
+an objection with no anchor is `withdrawn`. Record the exchange as `objections[]` on the finding —
+the checker validates its shape, the submission gate refuses a sustained objection or no exchange at
+all, and the answered objections are the report's "existing protections" section already drafted.
+
+Place each survivor on the ladder in `references/impact-classes.md`: the class the evidence reaches
+is what the payout is for, and under- and overclaiming are the same mistake in opposite directions.
+Keep technical validity, severity, eligibility and novelty as four separate judgments. Nothing is
+deleted — a refuted record citing a specific protection is alive again if that protection is edited.
 
 ## Stage 5 — Verify
 
@@ -128,6 +161,10 @@ python3 <skill-dir>/scripts/bounty.py check --run <run> --submission
 A dup collision is not an automatic drop; it is a demand to state how your mechanism differs. No
 public match never proves no private duplicate. Check program exclusions and the exact deployed
 configuration separately from everything else.
+
+`verify-deployment` is the only thing that sets `deployment_status`. For a proxy it compares the
+**implementation**; a proxy whose own runtime matches your artifact is reported `partial`, because
+the code that executes was never compared, and `partial` does not pass the gate.
 
 ## Stage 7 — Deliver and resume
 

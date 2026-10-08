@@ -27,9 +27,12 @@ SEVERITIES = {'unassessed', 'informational', 'low', 'medium', 'high', 'critical'
 SCOPE_STATUSES = {'unknown', 'in-scope', 'out-of-scope'}
 DEPLOY_STATUSES = {'unknown', 'exact', 'partial', 'mismatch', 'not-applicable'}
 NOVELTY_STATUSES = {'not-checked', 'no-public-match-found', 'matched-public-issue'}
+GATES = {'interruption', 'reachability', 'trigger', 'harm', 'eligibility', 'evidence'}
+OBJECTION_OUTCOMES = {'answered', 'sustained', 'withdrawn'}
 REQUIRED = ('id', 'title', 'status', 'severity', 'bug_class', 'revision', 'root_cause',
             'affected_paths', 'attacker_capabilities', 'preconditions', 'impact',
-            'scope_status', 'deployment_status', 'novelty', 'evidence', 'rejection_reason')
+            'scope_status', 'deployment_status', 'novelty', 'evidence', 'objections',
+            'rejection_reason')
 
 
 def load_keccak():
@@ -80,7 +83,7 @@ def template():
                 attacker_capabilities='', preconditions='', impact='',
                 scope_status='unknown', deployment_status='unknown',
                 novelty={'status': 'not-checked', 'sources': []},
-                evidence={}, rejection_reason='')
+                evidence={}, objections=[], rejection_reason='')
 
 
 def initialize(repo, out):
@@ -165,6 +168,32 @@ def _check_record(row, prefix, run, seen, errors):
             errors.append(prefix + ': novelty.sources must be a string array')
         elif novelty.get('status') != 'not-checked' and not sources:
             errors.append(prefix + ': novelty check requires sources and comparison notes')
+    objections = row['objections']
+    if not isinstance(objections, list):
+        errors.append(prefix + ': objections must be an array')
+    else:
+        for j, item in enumerate(objections):
+            label = f'{prefix}.objections[{j}]'
+            if not isinstance(item, dict):
+                errors.append(label + ': must be an object')
+                continue
+            if item.get('gate') not in GATES:
+                errors.append(label + ': gate must be one of ' + ', '.join(sorted(GATES)))
+            if not has_text(item.get('claim')):
+                errors.append(label + ': claim is required')
+            outcome = item.get('outcome')
+            if outcome not in OBJECTION_OUTCOMES:
+                errors.append(label + ': outcome must be one of '
+                              + ', '.join(sorted(OBJECTION_OUTCOMES)))
+            # A withdrawn objection is one that could produce no anchor - that is why it was
+            # withdrawn - so requiring one here would make the outcome unrecordable.
+            elif outcome != 'withdrawn' and not has_text(item.get('anchor')):
+                errors.append(label + ': anchor is required unless the objection was withdrawn')
+            if outcome == 'answered':
+                # Symmetry: an answer defeats an objection only with its own anchor.
+                for key in ('answer', 'answer_anchor'):
+                    if not has_text(item.get(key)):
+                        errors.append(label + ': an answered objection requires ' + key)
     evidence = row['evidence']
     if not isinstance(evidence, dict):
         errors.append(prefix + ': evidence must be an object')
@@ -215,6 +244,15 @@ def _check_submission(row, prefix, run, errors):
                       '(what moves, how much, at what attacker cost)')
     if not (run / 'dup-map.json').is_file():
         errors.append(prefix + ': submission requires a built dup-map.json in the run')
+    objections = row['objections'] if isinstance(row['objections'], list) else []
+    if not objections:
+        errors.append(prefix + ': submission requires a recorded triage exchange; a finding no '
+                      'agent attacked is a finding nobody has reviewed')
+    sustained = [o for o in objections if isinstance(o, dict) and o.get('outcome') == 'sustained']
+    if sustained:
+        gates = ', '.join(sorted({str(o.get('gate')) for o in sustained}))
+        errors.append(prefix + ': submission blocked by sustained objection(s) on ' + gates
+                      + '; answer them with an anchor or mark the finding refuted')
 
 
 def validate(run, submission=False):
@@ -414,6 +452,223 @@ def delta(repo, since, scope_prefixes=None, limit=40):
 
 
 # --------------------------------------------------------------------------- #
+# lens bundles
+# --------------------------------------------------------------------------- #
+
+LENSES = ('delta', 'upstream-diff', 'coverage-gap', 'accounting', 'live-reality',
+          'integration-auth', 'liveness', 'anchor-account', 'seam')
+TRIAGE = 'triage'
+AIM_LENSES = ('delta', 'upstream-diff', 'coverage-gap')
+ATTACK_LENSES = ('accounting', 'integration-auth', 'liveness', 'live-reality')
+BUNDLE_WARN_BYTES = 400_000
+
+BUNDLE_HEADER = """# Hunt bundle: {lens}
+
+You are one lens of a bounty hunt on `{target}` at commit `{commit}`.
+
+Read this bundle once, top to bottom, then hunt. It holds, in order: how to think (SOP), the
+rules every lens obeys, YOUR lens procedure, the run context, and the in-scope source.
+
+Return only CANDIDATE and LEAD blocks in the format the shared rules define. Do not refute your
+own candidates - a later pass does that against written gates, and it needs your claim at full
+strength. Do not claim any command ran, test passed or chain value was read unless you did it.
+"""
+
+BUNDLE_FOOTER = """
+---
+
+# Your task, restated
+
+Lens: **{lens}**. Target: `{target}` @ `{commit}`.
+
+Hunt your lens over the source above, aimed at the ranked surfaces when a ranking is included.
+Weaponize anything you find across every sibling. Escalate each finding to the worst variant the
+evidence actually reaches. Emit CANDIDATE and LEAD blocks only, each with a `surface`, a
+kebab-case `bug_class`, a concrete `proof` from this source, and the one `experiment` that would
+settle it. Prefer a LEAD over dropping a trail.
+"""
+
+
+TRIAGE_HEADER = """# Triage bundle
+
+You are the bounty program's triage engineer, reviewing reports against `{target}` at commit
+`{commit}`.
+
+This bundle holds, in order: how to read code, your triage instructions, the impact ladder, the
+records under review, the run context, and the in-scope source.
+
+Your job is to reject what should be rejected, and to say exactly what stops each claim. Every
+objection carries an anchor - quoted code, quoted specification, a named test, or a live chain
+read. An objection you cannot anchor is withdrawn, not weighed. Concede explicitly when you
+attacked a gate and could not break it.
+"""
+
+TRIAGE_FOOTER = """
+---
+
+# Your task, restated
+
+Target: `{target}` @ `{commit}`. For every record above, work the five gates plus the evidence
+itself, and emit OBJECTION blocks with `gate`, `anchor` type and the quoted evidence, plus
+CONCEDED blocks where you tried and failed. End with a one-line verdict per record: dead, demote,
+severity-down, eligibility-blocked, or survives.
+
+Reject on anchors, never on impressions. Never reject because the code is well audited, widely
+forked or formally verified - those make a surviving bug more valuable, not less likely.
+"""
+
+
+def _fenced(path, text):
+    fence = '```'
+    while fence in text:
+        fence += '`'
+    language = {'.sol': 'solidity', '.rs': 'rust', '.vy': 'python', '.move': 'move',
+                '.cairo': 'cairo', '.py': 'python', '.ts': 'typescript', '.js': 'javascript',
+                '.go': 'go'}.get(Path(path).suffix, '')
+    return f'### {path}\n\n{fence}{language}\n{text.rstrip()}\n{fence}\n'
+
+
+def _collect(root, paths):
+    parts, skipped = [], []
+    for path in paths:
+        try:
+            text = (root / path).read_text(encoding='utf-8')
+        except (OSError, UnicodeDecodeError):
+            skipped.append(path)
+            continue
+        parts.append(_fenced(path, text))
+    return '\n'.join(parts), skipped
+
+
+def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
+    """Assemble one deterministic bundle per lens. This is the dispatch mechanic:
+    a pass that did not run this command did not bundle its source."""
+    repo, run = Path(repo).resolve(), Path(run).resolve()
+    root = Path(git(repo, 'rev-parse', '--show-toplevel').strip()).resolve()
+    commit = git(root, 'rev-parse', 'HEAD').strip()
+    references = SKILL_ROOT / 'references'
+    chosen = []
+    for lens in lenses:
+        if lens == 'all':
+            chosen.extend(LENSES)
+        elif lens == 'aim':
+            chosen.extend(AIM_LENSES)
+        elif lens == 'attack':
+            chosen.extend(ATTACK_LENSES)
+        elif lens in LENSES or lens == TRIAGE:
+            chosen.append(lens)
+        else:
+            raise ValueError(f'unknown lens {lens!r}; choose from ' + ', '.join(LENSES)
+                             + f', {TRIAGE}, or the groups aim / attack / all')
+    chosen = list(dict.fromkeys(chosen))
+    for lens in chosen:
+        source_file = (references / f'{TRIAGE}.md' if lens == TRIAGE
+                       else references / 'hunt-agents' / f'{lens}-agent.md')
+        if not source_file.is_file():
+            raise ValueError(f'instruction file missing for {lens!r}; the skill install '
+                             'is incomplete')
+
+    tracked = [p for p in git(root, 'ls-files', '-z').split('\0') if p]
+    in_scope = [p for p in tracked if Path(p).suffix in SOURCE_SUFFIXES
+                and not _is_test_path(p)
+                and (not scope_prefixes or any(p.startswith(s) for s in scope_prefixes))]
+    test_paths = [p for p in tracked if Path(p).suffix in SOURCE_SUFFIXES and _is_test_path(p)]
+
+    out = run / 'bundles'
+    out.mkdir(parents=True, exist_ok=True)
+    source, skipped = _collect(root, in_scope)
+    source_doc = f'# In-scope source ({len(in_scope)} files)\n\n' + source
+    (out / 'source.md').write_text(source_doc, encoding='utf-8')
+    tests, _ = _collect(root, test_paths)
+    tests_doc = (f'# Tests, mocks and fixtures ({len(test_paths)} files)\n\n'
+                 'Read these as evidence of what the authors believed, not as code to audit.\n\n'
+                 + tests)
+    (out / 'tests.md').write_text(tests_doc, encoding='utf-8')
+
+    context = []
+    for name in ('scope.md', 'dup-map.json', 'known-hypotheses.md'):
+        path = run / name
+        if path.is_file() and path.stat().st_size > 0:
+            body = path.read_text(encoding='utf-8')
+            context.append(f'## Run context: {name}\n\n```\n{body.rstrip()}\n```\n')
+    for extra in includes or []:
+        path = Path(extra)
+        if not path.is_file():
+            raise ValueError(f'--include {extra!r} is not a file')
+        body = path.read_text(encoding='utf-8', errors='replace')
+        context.append(f'## Included: {path.name}\n\n```\n{body.rstrip()}\n```\n')
+    context_doc = '\n'.join(context)
+
+    shared = (references / 'hunt-agents' / '_shared.md').read_text(encoding='utf-8')
+    sop_path = references / 'sop.md'
+    sop = sop_path.read_text(encoding='utf-8') if sop_path.is_file() else ''
+    findings_doc = ''
+    findings_path = run / 'findings.json'
+    if findings_path.is_file():
+        body = findings_path.read_text(encoding='utf-8')
+        findings_doc = ('## The records under review\n\nAttack these. Nothing here is '
+                        'established.\n\n```json\n' + body.rstrip() + '\n```\n')
+    impact_path = references / 'impact-classes.md'
+    impact = impact_path.read_text(encoding='utf-8') if impact_path.is_file() else ''
+
+    written = []
+    for lens in chosen:
+        if lens == TRIAGE:
+            # Triage gets the records, the source and the impact ladder - but never the hunt
+            # stance, which forbids self-refutation and is the opposite of this agent's job.
+            pieces = [TRIAGE_HEADER.format(target=root.name, commit=commit)]
+            if sop:
+                pieces.append(sop)
+            pieces.append((references / f'{TRIAGE}.md').read_text(encoding='utf-8'))
+            if impact:
+                pieces.append(impact)
+            if findings_doc:
+                pieces.append(findings_doc)
+            if context_doc:
+                pieces.append(context_doc)
+            pieces.append(source_doc)
+            pieces.append(TRIAGE_FOOTER.format(target=root.name, commit=commit))
+            path = out / 'triage-bundle.md'
+            path.write_text('\n---\n\n'.join(pieces), encoding='utf-8')
+            written.append({'lens': lens, 'bundle': str(path.relative_to(run)),
+                            'bytes': path.stat().st_size,
+                            'records_under_review': bool(findings_doc)})
+            continue
+        lens_text = (references / 'hunt-agents' / f'{lens}-agent.md').read_text(encoding='utf-8')
+        pieces = [BUNDLE_HEADER.format(lens=lens, target=root.name, commit=commit)]
+        if sop:
+            pieces.append(sop)
+        pieces += [shared, lens_text]
+        if lens == 'seam' and findings_doc:
+            pieces.append(findings_doc.replace('Attack these. Nothing here is established.',
+                                               'The earlier passes produced these. Cross them.'))
+        if context_doc:
+            pieces.append(context_doc)
+        pieces.append(source_doc)
+        if lens == 'coverage-gap':
+            pieces.append(tests_doc)
+        pieces.append(BUNDLE_FOOTER.format(lens=lens, target=root.name, commit=commit))
+        path = out / f'{lens}-bundle.md'
+        path.write_text('\n---\n\n'.join(pieces), encoding='utf-8')
+        written.append({'lens': lens, 'bundle': str(path.relative_to(run)),
+                        'bytes': path.stat().st_size})
+
+    notes = []
+    biggest = max((w['bytes'] for w in written), default=0)
+    if biggest > BUNDLE_WARN_BYTES:
+        notes.append(f'largest bundle is {biggest} bytes; narrow with --scope and hunt the ranked '
+                     'surfaces first, or the lens will skim instead of reading')
+    if skipped:
+        notes.append(f'{len(skipped)} file(s) unreadable and omitted: ' + ', '.join(skipped[:5]))
+    if not in_scope:
+        notes.append('no in-scope source matched; check --scope and the tracked file list')
+    return {'target': str(root), 'commit': commit, 'run': str(run),
+            'in_scope_files': len(in_scope), 'test_files_bundled_for_coverage_gap': len(test_paths),
+            'context_sections': len(context), 'bundles': written, 'notes': notes,
+            'dispatch': 'Give each bundle to its own agent, in its own context. Record in '
+                        'coverage.md which lenses actually ran.'}
+
+# --------------------------------------------------------------------------- #
 # target scoring
 # --------------------------------------------------------------------------- #
 
@@ -576,15 +831,31 @@ def proxy_slots():
     }
 
 
+# solc appends a CBOR map then its own 2-byte big-endian length. The map starts with a
+# CBOR major-type-5 header (0xa1..0xaf for 1..15 pairs) and names its hash algorithm.
+METADATA_MARKERS = (b'solc', b'ipfs', b'bzzr0', b'bzzr1')
+METADATA_MIN_BYTES = 0x20
+
+
 def strip_metadata(code_hex):
-    """Remove the trailing solc CBOR metadata so two builds can be compared."""
+    """Remove the trailing solc CBOR metadata, and only if the tail really is that.
+
+    Stripping on the trailing length alone makes unrelated bytecodes compare equal: any two
+    runtimes ending in the same small number would have their differing bodies cut away. So the
+    tail must look like solc metadata before a single byte is removed.
+    """
     raw = bytes.fromhex(code_hex[2:] if code_hex.startswith('0x') else code_hex)
-    if len(raw) < 4:
+    if len(raw) < METADATA_MIN_BYTES + 2:
         return raw, 0
     length = int.from_bytes(raw[-2:], 'big')
-    if 0 < length <= len(raw) - 2:
-        return raw[:-(length + 2)], length + 2
-    return raw, 0
+    if not METADATA_MIN_BYTES <= length <= len(raw) - 2:
+        return raw, 0
+    blob = raw[-(length + 2):-2]
+    if not blob or not 0xa1 <= blob[0] <= 0xaf:
+        return raw, 0
+    if not any(marker in blob for marker in METADATA_MARKERS):
+        return raw, 0
+    return raw[:-(length + 2)], length + 2
 
 
 def compare_bytecode(onchain_hex, artifact_hex):
@@ -651,15 +922,44 @@ def verify_deployment(rpc, address, artifact=None, block='latest', opener=None):
     if result['proxy']:
         result['note'] = ('this address is a proxy; verify the implementation address too, '
                           'and record which implementation was live at this block')
+    implementation = result['proxy'].get('eip1967-implementation')
+    if implementation:
+        impl_code = rpc_call(rpc, 'eth_getCode', [implementation, pinned], opener) or '0x'
+        result['proxy_implementation'] = {
+            'address': implementation,
+            'runtime_code_bytes': max(0, (len(impl_code) - 2) // 2),
+            'runtime_code_keccak256': keccak.keccak_hex(bytes.fromhex(impl_code[2:]))
+                                      if len(impl_code) > 2 else None}
     if artifact:
         artifact_code, source_key = read_artifact(artifact)
-        comparison = compare_bytecode(code, artifact_code)
         result['artifact'] = {'path': str(artifact), 'field': source_key}
-        result['comparison'] = comparison
-        result['deployment_status'] = comparison['status']
-        if result['proxy'] and comparison['status'] != 'exact':
-            result['comparison']['reason'] += (' - note this compared the PROXY code; '
-                                               'point --artifact at the implementation build')
+        if implementation:
+            # The logic lives in the implementation, so that is what an artifact must match.
+            # A proxy whose own runtime matches proves nothing about the code that runs.
+            impl_comparison = compare_bytecode(impl_code, artifact_code)
+            result['compared'] = 'implementation'
+            result['comparison'] = impl_comparison
+            result['deployment_status'] = impl_comparison['status']
+            result['comparison']['reason'] += (
+                f' - compared against the implementation at {implementation}, not the proxy; '
+                'the proxy may be pointed elsewhere by its admin at any later block')
+            proxy_comparison = compare_bytecode(code, artifact_code)
+            if proxy_comparison['status'] == 'exact':
+                result['deployment_status'] = 'partial'
+                result['comparison'] = {
+                    'status': 'partial',
+                    'reason': 'the artifact matches the PROXY runtime, not the implementation. '
+                              'Build and pass the implementation artifact; a matching proxy '
+                              'establishes nothing about the logic that executes.'}
+        else:
+            comparison = compare_bytecode(code, artifact_code)
+            result['compared'] = 'address runtime'
+            result['comparison'] = comparison
+            result['deployment_status'] = comparison['status']
+        if result['proxy'] and result['deployment_status'] == 'exact':
+            result['note'] = ('implementation bytecode matches at this block. A proxy can be '
+                              'repointed, so record this block in the finding and recheck before '
+                              'submitting.')
     else:
         result['reason'] = ('no local artifact given, so source-to-chain identity is unproven; '
                             'build the target and pass --artifact')
@@ -670,30 +970,68 @@ def verify_deployment(rpc, address, artifact=None, block='latest', opener=None):
 # static-type eth_call probe
 # --------------------------------------------------------------------------- #
 
+TRUE_WORDS = ('1', 'true', 'yes')
+FALSE_WORDS = ('0', 'false', 'no')
+
+
+def _int_bits(type_name, prefix):
+    digits = type_name[len(prefix):]
+    bits = 256 if not digits else int(digits)
+    if bits % 8 or not 8 <= bits <= 256:
+        raise ValueError(f'{type_name} is not a valid ABI type; width must be 8..256 in steps of 8')
+    return bits
+
+
 def encode_static(types, args):
+    """ABI-encode static arguments, refusing anything it cannot encode faithfully.
+
+    Silent coercion is worse than an error here: a wrong argument produces a successful call
+    against the wrong input, and the reader believes the live value they get back.
+    """
     if len(types) != len(args):
         raise ValueError(f'signature takes {len(types)} argument(s), {len(args)} given')
     out = b''
     for type_name, raw in zip(types, args):
+        text = str(raw).strip()
         if type_name == 'address':
-            value = int(raw, 16)
-            out += value.to_bytes(32, 'big')
+            if not re.fullmatch(r'0x[0-9a-fA-F]{40}', text):
+                raise ValueError(f'{raw!r} is not an address: expected 0x and 40 hex characters')
+            out += int(text, 16).to_bytes(32, 'big')
         elif type_name == 'bool':
-            out += (1 if str(raw).lower() in ('1', 'true', 'yes') else 0).to_bytes(32, 'big')
-        elif re.fullmatch(r'uint(\d+)?', type_name):
-            out += int(raw, 0).to_bytes(32, 'big')
-        elif re.fullmatch(r'int(\d+)?', type_name):
-            value = int(raw, 0)
+            lowered = text.lower()
+            if lowered in TRUE_WORDS:
+                out += (1).to_bytes(32, 'big')
+            elif lowered in FALSE_WORDS:
+                out += (0).to_bytes(32, 'big')
+            else:
+                raise ValueError(f'{raw!r} is not a bool: use true/false, 1/0 or yes/no')
+        elif re.fullmatch(r'uint\d*', type_name):
+            bits = _int_bits(type_name, 'uint')
+            value = int(text, 0)
+            if not 0 <= value < (1 << bits):
+                raise ValueError(f'{raw!r} does not fit in {type_name}')
+            out += value.to_bytes(32, 'big')
+        elif re.fullmatch(r'int\d*', type_name):
+            bits = _int_bits(type_name, 'int')
+            value = int(text, 0)
+            if not -(1 << (bits - 1)) <= value < (1 << (bits - 1)):
+                raise ValueError(f'{raw!r} does not fit in {type_name}')
             out += (value & ((1 << 256) - 1)).to_bytes(32, 'big')
-        elif re.fullmatch(r'bytes(\d+)', type_name):
-            data = bytes.fromhex(raw[2:] if raw.startswith('0x') else raw)
+        elif re.fullmatch(r'bytes\d+', type_name):
             size = int(type_name[5:])
-            if len(data) > size:
-                raise ValueError(f'{raw} does not fit in {type_name}')
+            if not 1 <= size <= 32:
+                raise ValueError(f'{type_name} is not a valid ABI type')
+            body = text[2:] if text.startswith('0x') else text
+            try:
+                data = bytes.fromhex(body)
+            except ValueError:
+                raise ValueError(f'{raw!r} is not hex for {type_name}')
+            if len(data) != size:
+                raise ValueError(f'{raw!r} is {len(data)} byte(s); {type_name} needs exactly {size}')
             out += data + b'\0' * (32 - len(data))
         else:
             raise ValueError(f'{type_name} is not a static type; use cast/foundry for '
-                             'strings, bytes and arrays')
+                             'strings, bytes, tuples and arrays')
     return out
 
 
@@ -753,6 +1091,15 @@ def build_parser():
                      help='path prefix to keep; repeatable')
     dlt.add_argument('--limit', type=int, default=40)
 
+    bnd = sub.add_parser('bundle', help='assemble one deterministic source bundle per hunt lens')
+    bnd.add_argument('--repo', required=True)
+    bnd.add_argument('--run', required=True)
+    bnd.add_argument('--lens', action='append', required=True,
+                     help='lens name, or a group: aim, attack, all. Repeatable.')
+    bnd.add_argument('--scope', action='append', default=None, help='path prefix to keep')
+    bnd.add_argument('--include', action='append', default=None,
+                     help='extra context file to append, e.g. a delta ranking. Repeatable.')
+
     score = sub.add_parser('score-target', help='prioritise a target from code and program facts')
     score.add_argument('--repo', required=True)
     score.add_argument('--program', required=True, help='JSON of published program facts')
@@ -801,6 +1148,10 @@ def main(argv=None):
             return 1 if errors or collisions else 0
         if args.action == 'delta':
             print(json.dumps(delta(args.repo, args.since, args.scope, args.limit), indent=2))
+            return 0
+        if args.action == 'bundle':
+            print(json.dumps(bundle(args.repo, args.run, args.lens, args.scope,
+                                    args.include), indent=2))
             return 0
         if args.action == 'score-target':
             print(json.dumps(score_target(args.repo, args.program), indent=2))

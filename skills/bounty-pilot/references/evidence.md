@@ -9,7 +9,7 @@ cause together.
 
 - `id`, `title`, `status`, `severity`, `bug_class`, `revision`, `root_cause`, `affected_paths`,
   `attacker_capabilities`, `preconditions`, `impact`, `scope_status`, `deployment_status`,
-  `novelty`, `evidence`, `rejection_reason`.
+  `novelty`, `evidence`, `objections`, `rejection_reason`.
 - `status`: `hypothesis` | `needs-evidence` | `verified` | `refuted`.
 - `severity`: `unassessed` | `informational` | `low` | `medium` | `high` | `critical`. Cite the
   program's rubric in `severity_rationale` before assigning a final label.
@@ -36,6 +36,23 @@ cause together.
 For `refuted`, `rejection_reason` cites a concrete protection, specification or test result. For
 `needs-evidence`, name the missing experiment. Lack of a toolchain is not a refutation.
 
+## The objection exchange
+
+`objections` records the two-round triage from `adjudicate.md`. Each entry carries `gate` (one of
+`interruption`, `reachability`, `trigger`, `harm`, `eligibility`, `evidence`), the `claim`, and an
+`outcome` of `answered`, `sustained` or `withdrawn`.
+
+An `answered` or `sustained` objection carries an `anchor`. An `answered` one also carries `answer`
+and `answer_anchor` — the symmetry is the point: an answer defeats an objection only when it is
+anchored in code, specification, a test or a live read, exactly as the objection had to be. A
+`withdrawn` objection needs no anchor, because the absence of one is why it was withdrawn; record
+the claim and `withdrawn_because` so the same unanchored objection is not raised again.
+
+The submission gate refuses a finding with a `sustained` objection, and refuses one with no
+objections at all: a finding no agent attacked is a finding nobody has reviewed. The exchange is
+also the raw material for the report's "existing protections" section, so recording it properly is
+drafting, not bookkeeping.
+
 ## The gates
 
 Technical validity, severity, program eligibility and public-known-issue status are four separate
@@ -55,11 +72,16 @@ python3 <skill-dir>/scripts/bounty.py dup-check --run <run>           # burned s
 python3 <skill-dir>/scripts/bounty.py check --run <run> --submission  # readiness gates
 ```
 
-The structural check verifies record completeness and that the artifacts exist. The submission gate
-additionally refuses what programs actually reject: a status other than `verified`, scope that is
-not established, a `deployment_status` other than `exact` or `not-applicable`, an unassessed
-severity, a severity with no rubric citation, fewer than two checked novelty sources, missing impact
-quantification, and a run with no dup map built.
+The structural check verifies record completeness, the shape of the objection exchange, and that
+the artifacts exist. The submission gate additionally refuses what programs actually reject: a
+status other than `verified`, scope that is not established, a `deployment_status` other than
+`exact` or `not-applicable`, an unassessed severity, a severity with no rubric citation, fewer than
+two checked novelty sources, missing impact quantification, a run with no dup map built, no triage
+exchange, and any sustained objection.
+
+On `deployment_status`: only `verify-deployment` sets it. For a proxy, the **implementation** must
+match — a proxy whose own runtime matches the artifact is reported as `partial`, because the code
+that executes was never compared.
 
 **Neither checker establishes that a finding is real.** They cannot run your PoC, judge your
 severity, see a private duplicate, or read the program's mind. An empty findings file passes the

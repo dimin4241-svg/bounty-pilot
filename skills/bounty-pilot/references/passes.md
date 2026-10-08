@@ -1,50 +1,85 @@
 # The hunt loop
 
-A pass is one round of lens agents over the target. Passes differ by **what they are aimed at**, not
-by how hard they try. Repeating one prompt produces the same findings with new titles; that is the
-failure this file exists to prevent.
+Passes differ by **what they are aimed at**, not by how hard they try. Repeating one prompt
+produces the same findings under new titles, and that is the main way a multi-pass hunt wastes
+money. This file settles the aiming, the dispatch mechanics, and when to stop.
 
-## Shape of the loop
+Two facts shape everything below. First, **the number of independent adversarial readings dominates
+recall** — more than prompt wording, more than model choice. Second, **aiming beats sweeping on a
+large or heavily audited codebase**, because an unaimed sweep spends the same effort on vanilla
+upstream code that three auditors already read. So: aim cheaply, then attack with as many
+independent readings as the budget allows.
 
-Default is three passes. Each pass dispatches its lenses, collects candidates and leads, then
-appends to `known-hypotheses.md` before the next pass starts.
+## Stage A — Aim (cheap, mechanical, not a hunt pass)
 
-**Pass 1 — where to look.** Lenses: `delta`, `upstream-diff`, `coverage-gap`.
-This pass produces almost no findings and that is correct: its product is a *ranked surface list* —
-which code is new since the audit, which is the fork's own deviation, and which is untested or
-untestable. Write that ranking into `coverage.md`. Everything later is aimed by it.
-Run `bounty.py delta` and `bounty.py score-target` here, before reading source in bulk.
+Three lenses whose job is a ranked surface list, not findings. They read diffs, manifests and test
+files rather than hunting the whole codebase, so they are cheap and they run once.
 
-**Pass 2 — mechanism.** Lenses: `accounting`, `integration-auth`, `liveness`.
-These are the heavy bug-class lenses, and they run **against the surfaces pass 1 ranked first**, not
-against the whole repo. Give each agent the ranking and the scope model, and let it read the rest of
-the source as needed.
+```sh
+S=<skill-dir>/scripts/bounty.py
+python3 $S delta --repo <checkout> --since <audited-commit> --scope src/ > <run>/delta.json
+python3 $S bundle --repo <checkout> --run <run> --lens aim --scope src/ --include <run>/delta.json
+```
 
-**Pass 3 — reality and seams.** Lenses: `live-reality`, plus one *seam* agent.
-`live-reality` verifies every externally-meaningful constant and the deployed configuration against
-the chain. The seam agent receives pass 1 and pass 2 output and hunts only mechanisms that need two
-lenses at once — an accounting hole reachable through a callback, a stale constant that only matters
-in the untested branch, a fork deviation that breaks an upstream invariant one layer away. Seam
-mechanisms are what single-lens passes structurally cannot see.
+Dispatch `delta`, `upstream-diff` and `coverage-gap`, one agent each. Their combined product goes
+into `coverage.md` as a ranked reading order, and every later pass is given it. If `--since` has no
+evidenced baseline, say so and review in full — never call an arbitrary recent range the
+post-audit delta.
 
-**Solana or Rust target:** `anchor-account` joins pass 2, and `live-reality` reads the on-chain IDL
-and account state in pass 3.
+## Stage B — Attack (the hunt passes)
 
-**Pass 4 and beyond** exist only when leads remain that name a concrete experiment. Then the pass is
-that experiment, not another sweep.
+```sh
+python3 $S bundle --repo <checkout> --run <run> --lens attack --scope src/ --include <run>/delta.json
+```
 
-## Dispatch
+That writes one bundle per mechanism lens — `accounting`, `integration-auth`, `liveness`,
+`live-reality` — each containing the SOP, the shared rules, that lens's procedure, the run context
+and all in-scope source. Add `--lens anchor-account` for a Solana or Rust target.
 
-Run the lenses of one pass in parallel when the runtime supports independent agents — each in its own
-context, each with the scope model, `_shared.md`, its own lens file, and `known-hypotheses.md`.
-Default to at most four concurrent workers. Independent contexts matter: agents sharing one context
-converge on the first idea and stop being independent reviewers.
+**A pass that did not run `bundle` did not bundle its source**, and a lens reading files
+opportunistically covers less than a lens handed everything. The command is the mechanic, not a
+suggestion.
 
-Where parallel agents are unavailable, run the same lenses sequentially and say so in the summary —
-sequential passes lose independence, because each lens has already read the previous lens's
-conclusions.
+Dispatch one agent per bundle, each in its own context, up to four concurrent by default. Tell each
+agent only: read this bundle and follow it. Independent contexts are the point — agents sharing one
+context converge on the first idea and stop being independent reviewers.
 
-Never dispatch a lens whose file you have not read, and never report a lens as run when it was not.
+**Pass 1** runs the mechanism lenses on the ranked surfaces. **Pass 2** runs the same lenses again,
+with `known-hypotheses.md` now in the bundle, so each is explicitly hunting past its own earlier
+output, plus the `seam` lens over both passes' records.
+
+> **Where budget allows, dispatch each mechanism lens twice in pass 1, in two independent
+> contexts.** Two independent readings of the same lens find different things; this is the cheapest
+> recall increase available, and it costs only tokens. Doubling four lenses turns a 3-pass hunt from
+> roughly 14 readings into roughly 18. State in the summary how many readings actually ran.
+
+## Stage C — Seams
+
+```sh
+python3 $S bundle --repo <checkout> --run <run> --lens seam --scope src/
+```
+
+The `seam` bundle carries the earlier passes' records, including the **demoted and refuted** ones,
+and hunts only mechanisms that need two axes at once. This is also where refusals get reconstructed:
+a lead demoted for "no impact" and one demoted for "unreachable" are often the same bug, each
+supplying what the other lacked.
+
+## Stage D — Triage, two rounds
+
+Findings now meet an agent whose job is to reject them. The full protocol, including the rule that
+**objections carry anchors too**, is in `adjudicate.md`.
+
+```sh
+python3 $S bundle --repo <checkout> --run <run> --lens triage
+```
+
+Round 1: the triage agent emits anchored `OBJECTION` blocks and explicit `CONCEDED` blocks. Round 2:
+each objection is answered with its own anchor, and the exchange is recorded on the finding as
+`objections[]`. The checker validates the shape; the submission gate refuses a finding with a
+sustained objection, or with no triage exchange at all.
+
+Run triage **after** the hunt passes, not between them. A hunter that knows triage is coming next
+starts softening its own claims, which is exactly what the separation exists to prevent.
 
 ## Between passes — write the floor
 
@@ -54,29 +89,44 @@ After every pass, append one line per investigated mechanism to `known-hypothese
 surface | bug-class | status | one line: why it is closed, or what is still open
 ```
 
-Status is `closed-refuted`, `closed-verified`, `open-needs-experiment`, or `open-blocked`. Include
+Status is `closed-refuted`, `closed-verified`, `open-needs-experiment` or `open-blocked`. Include
 the mechanisms you looked for and did **not** find — an absence recorded is coverage; an absence
-forgotten is a pass spent re-deriving it.
+forgotten is a pass spent re-deriving it. Record what you did not reach too: files unread, branches
+untraced, dependencies unopened. That list is the honest answer to "what did this cover", and it is
+where the next pass aims.
 
-Also record what you did not reach: files not read, branches not traced, dependencies not opened.
-That list is the honest answer to "what did this audit cover", and it is where pass 3 aims.
+Update `coverage.md` with which lenses actually ran, how many readings each got, and what each
+closed. A lens you could not dispatch is reported, never silently skipped.
 
 ## Stop rules
 
-Stop when any one of these is true:
+Stop when any one is true:
 
 - The planned pass count is spent.
-- Two consecutive passes produce neither a new mechanism nor new coverage. More passes will not
-  help; the leads need experiments, not more reading.
-- Every remaining lead is blocked on the same missing capability (a toolchain, an RPC, program
-  rules). Report the blocker instead of working around it with narrative.
+- Two consecutive passes produce neither a new mechanism nor new coverage. More reading will not
+  help; the open leads need experiments.
+- Every remaining lead is blocked on the same missing capability — a toolchain, an RPC, program
+  rules. Report the blocker rather than narrating around it.
 
-There is no finding quota. Zero verified findings after three honest passes is a legitimate result,
-and far more useful than three inflated ones — say which surfaces you closed and why.
+There is no finding quota. Zero verified findings after an honest run is a legitimate result, and
+more useful than three inflated ones: say which surfaces you closed and on what evidence.
+
+## Budget, honestly
+
+A 3-stage run with four mechanism lenses, doubled in pass 1, is roughly 18 agent readings plus
+triage. Each mechanism bundle contains the full in-scope source, so cost scales with the codebase —
+`bundle` reports each bundle's size and warns past 400 KB, where narrowing `--scope` and trusting
+the ranking beats handing a lens more than it will read.
+
+If the target is Solidity and `solidity-auditor` is installed, delegate the classic bug-class sweep
+to it in loop mode instead of writing those lenses yourself, and spend this loop's passes on the
+aimed lenses it has no equivalent for. `compare.md` has the division of labour and the import rules.
+Do not nest the two orchestrators.
 
 ## Carrying work across scans
 
 `known-hypotheses.md` and `findings.json` from a previous run on the same target are inputs to the
 next one. On resume, compare the recorded commit with the current one: mechanisms on unchanged code
-stay closed, mechanisms on changed code reopen. A refuted hypothesis whose refuting protection was
-edited is no longer refuted — that is one of the most productive things a second scan can find.
+stay closed, mechanisms on changed code reopen. A refuted record whose cited protection has since
+been edited is alive again — rechecking exactly those is one of the most productive things a second
+scan does.

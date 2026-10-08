@@ -25,7 +25,8 @@ Bounty Pilot gives a coding agent a repeatable workflow for **Solidity/EVM audit
 It has two halves, and both decide whether a hunt finds anything:
 
 - A **funnel** that settles where to look and what counts as evidence — which target is worth the week, which code the last audit never saw, which surfaces are already burned by published known issues, and whether the bytecode on chain is the code you are reading.
-- A **hunt** of eight aimed lenses dispatched over differentiated passes, where generation and refutation are deliberately separate steps: an agent that refutes itself while hunting finds less, and an agent that never refutes itself files reports that triage kills.
+- A **hunt** of nine aimed lenses, dispatched from assembled bundles over differentiated passes, where generation and refutation are deliberately separate steps: an agent that refutes itself while hunting finds less, and an agent that never refutes itself files reports that triage kills.
+- A **two-round objection exchange** after the hunt, in which a triage agent is told to reject each finding and must anchor every objection in quoted code, quoted specification, a named test or a live chain read — and the answers must be anchored too. Both sides carry the same burden, because a one-round review rejects almost everything and you never learn which rejection was wrong.
 
 **It is an agent skill, not a hosted scanner.** Your agent reads the instructions, inspects the target, runs available tools, and records evidence. The included Python helpers organize results, read live chain state and check structure; they do not discover or prove vulnerabilities by themselves.
 
@@ -109,10 +110,22 @@ Alternatively, copy `skills/bounty-pilot` into your agent's supported skills dir
 | `integration-auth` | **Boundaries** — which callback parameters the attacker controls |
 | `liveness` | **Persistence** — cheap, unprivileged, irreversible denial |
 | `anchor-account` | **Solana** — account substitution, PDA seeds, CPI authority |
+| `seam` | **Combinations** — mechanisms no single lens can see, and refusals worth overturning |
 
-Passes differ by **what they aim at**, not by effort. Pass 1 produces a ranked surface list; pass 2 attacks it with the mechanism lenses; pass 3 checks live reality and the seams only two lenses together can see. Between passes, investigated mechanisms — including the ones looked for and *not* found — are written to `known-hypotheses.md`, and later passes must hunt past it.
+Passes differ by **what they aim at**, not by effort. Aiming is cheap and mechanical — diffs, manifests and test files — and produces a ranked reading order, not findings. The attack passes then run the mechanism lenses against that ranking, each from an assembled bundle holding the reading SOP, the shared rules, that lens's procedure, the run context and all in-scope source:
 
-The default budget is **up to three passes**. Independent lenses may run on up to four workers when supported; otherwise the workflow runs sequentially and says so. It stops at the budget, or after two consecutive passes yield neither a new mechanism nor new coverage. There is no infinite loop and no finding quota — zero verified findings after three honest passes is a legitimate result.
+```sh
+python3 skills/bounty-pilot/scripts/bounty.py bundle \
+  --repo /path/to/target --run run --lens attack --scope src/ --include run/delta.json
+```
+
+One bundle per lens, one agent per bundle, each in its own context. Recall is driven by the number of **independent** adversarial readings, so where budget allows each mechanism lens is dispatched twice in separate contexts — the cheapest recall increase available. Between passes, investigated mechanisms — including the ones looked for and *not* found — are written to `known-hypotheses.md`, and later passes must hunt past it.
+
+The default budget is **up to three stages**, roughly 18 readings plus triage. It stops at the budget, or after two consecutive passes yield neither a new mechanism nor new coverage. There is no infinite loop and no finding quota — zero verified findings after an honest run is a legitimate result.
+
+### Severity is the payout
+
+Programs pay for the **impact class** a report establishes, so every candidate is pushed to the highest class its evidence genuinely reaches and no further: the same root cause filed as "accounting inconsistency" and as "the market permanently stops accepting deposits, with no admin function that repairs it" is the same code and two different payouts. [`impact-classes.md`](skills/bounty-pilot/references/impact-classes.md) holds the ladder and what each class demands as proof.
 
 ### Finding states
 
@@ -148,6 +161,7 @@ But it audits a **repository**, while a bounty submission is a claim about a **d
 | Priority on code the last audit never saw | all code equally | `delta` |
 | Constants checked against the chain | source only | `eth-call`, `live-reality` |
 | A runnable PoC with a negative control | reasoning trace | evidence gates, `templates/` |
+| Objections held to the same evidence standard as findings | self-scored confidence | anchored two-round exchange |
 | Non-EVM targets | Solidity only | Rust/Solana route |
 
 Its confidence score is self-assessed by the model that produced the finding, so a high number means the agent was convinced, not that anything executed. **The two are additive.** Recommended combination: run Bounty Pilot's funnel and `delta`, delegate the Solidity bug-class sweep to `solidity-auditor` in loop mode, run the aimed lenses it has no equivalent for, import its output as `hypothesis` records, then adjudicate, verify and gate everything together. Do not nest the two orchestrators. Full detail and import rules: [references/compare.md](skills/bounty-pilot/references/compare.md).
@@ -174,7 +188,10 @@ Inspect and pin upstream revisions before use. Delegate bounded tasks instead of
 | [Target selection](skills/bounty-pilot/references/targets.md) | What makes a target worth a week, and the program facts file |
 | [Hunt agents](skills/bounty-pilot/references/hunt-agents) | The eight aimed lenses and their shared stance and output contract |
 | [Pass protocol](skills/bounty-pilot/references/passes.md) | What each pass aims at, dispatch, the known-hypotheses floor, stop rules |
-| [Adjudication](skills/bounty-pilot/references/adjudicate.md) | The five gates, outcomes, severity and promotions |
+| [Reading SOP](skills/bounty-pilot/references/sop.md) | How to read code: plain restatement, obligation tracing, backward reads, escalation |
+| [Adjudication](skills/bounty-pilot/references/adjudicate.md) | The two-round exchange, the five gates, outcomes and promotions |
+| [Triage agent](skills/bounty-pilot/references/triage.md) | The agent paid to reject, and the anchors it must produce |
+| [Impact classes](skills/bounty-pilot/references/impact-classes.md) | What the payout is for, and where hunters leave money |
 | [Duplicate map](skills/bounty-pilot/references/dup-map.md) | Sources, format and what a collision means |
 | [Audit lenses](skills/bounty-pilot/references/lenses.md) | Classic bug-class checklists per stack |
 | [Evidence rules](skills/bounty-pilot/references/evidence.md) | Candidate records and verification gates |
@@ -193,6 +210,11 @@ python3 $S score-target --repo /path/to/target --program run/program.json
 
 # Use a new private directory outside both the target and the skill package.
 python3 $S init --repo /path/to/target --out /path/to/private/new-run
+
+# Assemble one bundle per lens: SOP + rules + lens procedure + context + in-scope source.
+python3 $S bundle --repo /path/to/target --run run --lens attack --scope src/
+python3 $S bundle --repo /path/to/target --run run --lens seam
+python3 $S bundle --repo /path/to/target --run run --lens triage
 
 # Rank non-test source changed since the exact commit the last audit covered.
 python3 $S delta --repo /path/to/target --since <audited-commit> --scope src/
@@ -215,12 +237,17 @@ python3 -m unittest discover -s tests -v
 
 `init` does not clone, audit or execute the target. `eth-call` encodes static types only — use `cast` for strings, bytes and arrays. `verify-deployment` never rounds `partial` up to `exact`: same-length bytecode that differs is consistent with immutables or a different compiler build, and is not proof the logic matches.
 
-`check` does not verify exploit truth, severity, originality or payout eligibility, and an empty finding list passes its structural checks. `check --submission` adds the readiness gates, and a green gate still means "nothing obviously missing", never "this is valid".
+`bundle` is the dispatch mechanic, not a convenience: a pass that skipped it handed its lenses less than they needed. Only the `coverage-gap` lens receives the test and mock files, because reading tests adversarially is its job and nobody else's.
+
+`check` does not verify exploit truth, severity, originality or payout eligibility, and an empty finding list passes its structural checks. `check --submission` adds the readiness gates — including a recorded triage exchange with no sustained objection — and a green gate still means "nothing obviously missing", never "this is valid".
 
 ## FAQ
 
 **Will it find more paid bugs?**  
-That has not been measured, and this repository contains no comparative benchmark. What changed in v0.2 is where effort goes: toward unreviewed code, unburned surfaces and what is actually deployed, and away from re-deriving a program's published known issues. The reasoning is stated so you can disagree with it; it is not a payout guarantee.
+That has not been measured, and this repository contains no comparative benchmark. What changed is where effort goes: toward unreviewed code, unburned surfaces, what is actually deployed, and the impact class the evidence reaches — and away from re-deriving a program's published known issues. The reasoning is stated so you can disagree with it; it is not a payout guarantee.
+
+**Why does the triage agent have to prove its objections?**  
+Because otherwise the exchange is asymmetric: the finding needs evidence and the rejection needs none. An agent allowed to reject on "probably intended" rejects nearly everything, and a wrongly refuted finding is invisible — you never learn it was real. So an objection carries quoted code, quoted specification, a named test or a live read, or it is withdrawn and recorded as withdrawn.
 
 **How is this different from `solidity-auditor`?**  
 That skill generates Solidity bug-class candidates better than this one does. This one decides which target and which code deserve the passes, checks that the code is deployed, burns known issues first, and gates what may be submitted. See [the comparison](#compared-with-solidity-auditor) — running both is the intended setup.

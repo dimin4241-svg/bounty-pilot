@@ -14,6 +14,12 @@ This cuts both ways: because refutation happens later, you may not call anything
 emit candidates and leads. A candidate with no experiment attached is worth little, so every one
 carries the single experiment that would settle it.
 
+**Who refutes, and when.** After the hunt passes, a triage agent reads your records in its own
+context, instructed to reject them and to anchor every objection in quoted code, quoted
+specification, a named test or a live chain read. Then each objection is answered with its own
+anchor. You are writing for that exchange: state the mechanism precisely enough to be attacked, and
+leave the softening to the agent whose job it is.
+
 ## What you are given
 
 Your bundle holds the in-scope source, the scope model, this file, your lens file, and — on every
@@ -26,6 +32,27 @@ it first, and spend your pass on surfaces or mechanisms it does not name.
 The dup map (`dup-map.json`) lists surfaces and bug classes already published by the program, its
 audits or its contests. A candidate that matches a dup-map entry is worth emitting **only** when
 you can name how your mechanism differs from the published one. Say that difference in the record.
+
+## Escalate before you hand it over
+
+Finding the mechanism is the middle of the work, not the end. The first consequence you notice is
+usually the cheapest one, and programs pay by impact class, so stopping early costs real money.
+Three moves, every time, before the candidate leaves your hands:
+
+1. **Find the siblings.** The same mistake is nearly always copied — the paired function, the second
+   market, the other collateral, the same hook in four adapters, the other chain's deployment. One
+   instance is a bug; five is the same bug with five times the exposure.
+2. **Chain to the worst reachable end.** Do not stop at "the accounting is wrong". Follow it to who
+   cannot withdraw, what cannot be liquidated, which cap is now unreachable, whose collateral is
+   mispriced. Keep going until the next step needs evidence you do not have — then stop **there**
+   and name the missing evidence in `blockers`.
+3. **Lower the cost.** Can the precondition be reached without the admin, without a flash loan,
+   without a large position, without waiting an epoch? A path needing nothing but a wallet is a
+   different severity class from one needing a million dollars.
+
+`impact-classes.md` lists the classes and what each demands as proof. Push to the highest class the
+evidence genuinely reaches, and not one step further: underclaiming gets paid at the lower class,
+and overclaiming gets the whole report read with suspicion.
 
 ## Weaponize across the codebase
 
