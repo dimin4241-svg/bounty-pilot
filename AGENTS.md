@@ -36,6 +36,10 @@ Preserve these invariants when editing:
   Never add a claim that a protocol was exploited without a source.
 - **`solc-bugs` reads the official list at runtime** rather than bundling a snapshot that would go
   stale, and reports a fetch failure instead of returning an empty, reassuring result.
+- **The backtest's blind protocol is enforced, not advised.** Sealing is refused when `truth.json`
+  already has entries, a case seals once, and a sealed file that changed voids the case. Any change
+  that turns one of these into a warning destroys the only measurement this package can make.
+  An unmatched hunt finding is never counted as a false positive.
 - **No benchmark claims** without a reproducible measurement in the repository.
 
 Skill entry point: `skills/bounty-pilot/SKILL.md`.

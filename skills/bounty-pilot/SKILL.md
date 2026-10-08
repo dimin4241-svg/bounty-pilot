@@ -189,7 +189,7 @@ configuration separately from everything else.
 **implementation**; a proxy whose own runtime matches your artifact is reported `partial`, because
 the code that executes was never compared, and `partial` does not pass the gate.
 
-## Stage 7 — Deliver and resume
+## Stage 7 — Deliver
 
 **First, answer `references/misses.md` against your own output** — twenty ways a hunt stops short,
 each with a cheap fix, and every one of them a near-miss you have already paid for. Do this on a run
@@ -209,3 +209,22 @@ toolkit.
 On resume, compare the current revision and configuration against the recorded ones, and revalidate
 every finding the changes touch. A hypothesis refuted by a protection that has since been edited is
 alive again — checking that is one of the most productive things a second scan does.
+
+## Measuring whether any of this works
+
+Nothing in this package is backed by a published benchmark, and the README says so. If the user
+wants a number rather than an argument, read `references/backtest.md` and run the blind protocol:
+hunt a revision whose real findings are already published, seal the output before the answers
+exist on disk, then count the rediscoveries.
+
+```sh
+python3 <skill-dir>/scripts/bounty.py backtest init --name <case> --repo <checkout> \
+    --commit <reviewed-commit> --out <private>/backtests/<case>
+python3 <skill-dir>/scripts/bounty.py backtest seal  --case <case-dir> --run <run-dir>
+python3 <skill-dir>/scripts/bounty.py backtest score --case <case-dir>
+```
+
+Never read the published findings before sealing — not even the titles. The harness refuses a case
+whose truth file was populated first, refuses a second seal, and voids a case whose sealed file
+changed. Set `lens` on each finding so rediscoveries can be credited to the lens that produced
+them; the misses, not the hits, are the tuning signal.

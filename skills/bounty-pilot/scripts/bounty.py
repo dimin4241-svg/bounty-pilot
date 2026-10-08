@@ -79,7 +79,7 @@ def skill_version():
 
 def template():
     return dict(id='BP-001', title='', status='hypothesis', severity='unassessed',
-                bug_class='', revision='', root_cause='', affected_paths=[],
+                bug_class='', revision='', lens='', root_cause='', affected_paths=[],
                 attacker_capabilities='', preconditions='', impact='',
                 scope_status='unknown', deployment_status='unknown',
                 novelty={'status': 'not-checked', 'sources': []},
@@ -149,6 +149,11 @@ def _check_record(row, prefix, run, seen, errors):
     if not isinstance(row['bug_class'], str) or not re.fullmatch(r'[a-z0-9]+(-[a-z0-9]+)*',
                                                                  row['bug_class'] or ''):
         errors.append(prefix + ': bug_class must be a kebab-case label')
+    lens = row.get('lens')
+    if lens is not None and not isinstance(lens, str):
+        errors.append(prefix + ': lens must be a string naming the lens that produced this')
+    elif isinstance(lens, str) and lens and lens not in LENSES and lens != 'manual':
+        errors.append(prefix + ': lens must be one of ' + ', '.join(LENSES) + ', or manual')
     paths = row['affected_paths']
     if not isinstance(paths, list) or not paths or not all(has_text(p) for p in paths):
         errors.append(prefix + ': affected_paths must be a nonempty string array')
@@ -1000,8 +1005,14 @@ OTHER_TOOLCHAIN_ADVISORIES = (
 )
 PRAGMA = re.compile(r'pragma\s+solidity\s+([^;]+);')
 EXACT_VERSION = re.compile(r'^\s*(\d+\.\d+\.\d+)\s*$')
-CONFIG_VERSION = re.compile(r'(?:solc_version|solc|version)\s*[=:]\s*[\"\']?v?'
-                            r'(\d+\.\d+\.\d+)')
+VERSION_VALUE = re.compile(r'["\']?[~^>=<\s]*v?(\d+\.\d+\.\d+)')
+# A key named `version` names a COMPILER version only inside a compiler block. Matching it
+# anywhere pulls in an npm package's own version or a plugin's, and then solc-bugs reports
+# bugs for a compiler nobody used.
+TOML_SOLC_KEY = re.compile(r'^\s*(solc_version|solc)\s*=\s*(.+?)\s*(?:#.*)?$', re.M)
+JS_COMPILER_BLOCK = re.compile(r'\b(solidity|solc)\b')
+JS_VERSION_KEY = re.compile(r'\bversion\s*:\s*(["\'][^"\']+["\'])')
+COMPILER_BLOCK_WINDOW = 800
 
 
 def fetch_json(url, opener=None, timeout=30):
@@ -1013,6 +1024,73 @@ def fetch_json(url, opener=None, timeout=30):
         return json.loads(response.read().decode('utf-8'))
 
 
+def _js_compiler_regions(text):
+    """Yield only the text of each `solidity`/`solc` block, matched by brace depth.
+
+    A fixed-size window after the key swallows whatever object comes next, which is how an
+    unrelated plugin's `version:` was being read as a compiler version.
+    """
+    for key in JS_COMPILER_BLOCK.finditer(text):
+        rest = text[key.end():]
+        head = re.match(r'\s*:\s*', rest)
+        if not head:
+            continue
+        rest = rest[head.end():]
+        inline = re.match(r'["\']([^"\']+)["\']', rest)
+        if inline:                       # solidity: "0.8.19"
+            yield inline.group(0)
+            continue
+        if not rest[:1] in ('{', '['):
+            continue
+        depth, end = 0, None
+        for i, char in enumerate(rest[:20000]):
+            if char in '{[':
+                depth += 1
+            elif char in '}]':
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        yield rest[:end] if end else rest[:COMPILER_BLOCK_WINDOW]
+
+
+def _versions_from_config(name, text):
+    """Read a compiler version only from the key that actually names one, per file format."""
+    found = []
+
+    def value(raw):
+        match = VERSION_VALUE.match(raw.strip())
+        return match.group(1) if match else None
+
+    if name.endswith('.toml'):
+        for match in TOML_SOLC_KEY.finditer(text):
+            version = value(match.group(2))
+            if version:
+                found.append(version)
+    elif name == 'package.json':
+        try:
+            data = json.loads(text)
+        except ValueError:
+            return found
+        for section in ('dependencies', 'devDependencies'):
+            entry = (data.get(section) or {}).get('solc')
+            if isinstance(entry, str):
+                version = value(entry)
+                if version:
+                    found.append(version)
+    else:  # hardhat / truffle: a `version:` key only inside a solidity or solc block
+        for region in _js_compiler_regions(text):
+            inline = value(region)
+            if inline and region.lstrip()[:1] in ('"', "'"):
+                found.append(inline)
+                continue
+            for match in JS_VERSION_KEY.finditer(region):
+                version = value(match.group(1))
+                if version:
+                    found.append(version)
+    return found
+
+
 def collect_compiler_versions(root):
     """Find which compiler actually built this code, and what the source merely asks for."""
     exact, ranges, sources = {}, {}, {}
@@ -1021,8 +1099,8 @@ def collect_compiler_versions(root):
     def note(version, where):
         exact.setdefault(version, []).append(where)
 
-    for name in ('foundry.toml', 'hardhat.config.js', 'hardhat.config.ts', 'truffle-config.js',
-                 'remappings.txt', 'package.json'):
+    for name in ('foundry.toml', 'hardhat.config.js', 'hardhat.config.ts', 'hardhat.config.cjs',
+                 'truffle-config.js', 'package.json'):
         path = root / name
         if not path.is_file():
             continue
@@ -1030,8 +1108,8 @@ def collect_compiler_versions(root):
             text = path.read_text(encoding='utf-8', errors='replace')
         except OSError:
             continue
-        for match in CONFIG_VERSION.finditer(text):
-            note(match.group(1), name)
+        for version in _versions_from_config(name, text):
+            note(version, name)
     # Build artifacts carry the authoritative compiler version.
     artifacts = 0
     for candidate in sorted(root.glob('out/**/*.json'))[:400]:
@@ -1267,6 +1345,259 @@ def eth_call(rpc, to, signature, args, block='latest', opener=None):
 
 
 # --------------------------------------------------------------------------- #
+# backtest: measure the hunt against already-published findings
+# --------------------------------------------------------------------------- #
+#
+# The only thing that makes a rediscovery number mean anything is that the hunt could not see
+# the answers. So the ground truth is loaded only AFTER the hunt's output is sealed, the seal
+# is hashed, and nothing can be sealed twice. A case whose truth file already had content when
+# the seal was taken is refused outright rather than scored with a caveat.
+
+TRUTH_SEVERITIES = {'critical', 'high', 'medium', 'low', 'informational'}
+MATCH_THRESHOLD = 2.0
+STOPWORDS = {'the', 'a', 'an', 'of', 'in', 'to', 'is', 'and', 'or', 'for', 'on', 'can', 'be',
+             'not', 'with', 'by', 'from', 'this', 'that', 'it', 'as', 'at', 'are', 'when',
+             'if', 'due', 'has', 'have', 'will', 'may', 'contract', 'function', 'user', 'users',
+             'attacker', 'protocol', 'token', 'tokens', 'value', 'amount'}
+
+
+def _sha256_file(path):
+    import hashlib
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _tokens(*texts):
+    words = set()
+    for text in texts:
+        for word in re.split(r'[^a-zA-Z0-9]+', (text or '').lower()):
+            if len(word) > 3 and word not in STOPWORDS:
+                words.add(word)
+    return words
+
+
+def _path_keys(paths):
+    keys = set()
+    for raw in paths or []:
+        if not isinstance(raw, str):
+            continue
+        lowered = raw.lower().strip()
+        head = lowered.split(':')[0]
+        keys.add(Path(head).name)
+        if ':' in lowered:
+            symbol = lowered.split(':', 1)[1]
+            keys.add(symbol)
+            keys.add(symbol.split('.')[-1])
+    return {k for k in keys if k}
+
+
+def _match_score(finding, truth):
+    """Propose, never decide. Mechanical overlap only - a human or an agent judges the pair."""
+    fpaths, tpaths = _path_keys(finding.get('affected_paths')), _path_keys(truth.get('paths'))
+    score, why = 0.0, []
+    shared_paths = fpaths & tpaths
+    if shared_paths:
+        score += 2.0
+        why.append('same file/symbol: ' + ', '.join(sorted(shared_paths)[:3]))
+    ftok = _tokens(finding.get('title'), finding.get('root_cause'), finding.get('bug_class'))
+    ttok = _tokens(truth.get('title'), truth.get('root_cause'))
+    shared_words = ftok & ttok
+    if shared_words:
+        score += min(2.0, 0.5 * len(shared_words))
+        why.append('shared terms: ' + ', '.join(sorted(shared_words)[:5]))
+    return score, why
+
+
+def backtest_init(name, repo, out, commit=None, scope=None):
+    repo = Path(repo).resolve()
+    root = Path(git(repo, 'rev-parse', '--show-toplevel').strip()).resolve()
+    head = git(root, 'rev-parse', 'HEAD').strip()
+    pinned = head
+    warnings = []
+    if commit:
+        pinned = git(root, 'rev-parse', '--verify', '--quiet', commit + '^{commit}').strip()
+        if pinned != head:
+            warnings.append(f'the checkout is at {head[:12]}, not the pinned {pinned[:12]}; '
+                            'check out the pinned commit before hunting or the measurement is '
+                            'against different code')
+    case = Path(out).resolve()
+    if case.exists():
+        raise ValueError('use a new case directory; an existing one is never overwritten')
+    case.mkdir(parents=True)
+    case.chmod(0o700)
+    dump(case / 'case.json', {
+        'schema_version': SCHEMA_VERSION, 'skill_version': skill_version(), 'name': name,
+        'created_at': datetime.now(timezone.utc).isoformat(), 'target_root': str(root),
+        'pinned_commit': pinned, 'checkout_head': head, 'scope_prefixes': scope or [],
+        'protocol': 'blind: hunt and seal first, load truth.json only afterwards'})
+    dump(case / 'truth.json', [])
+    dump(case / 'truth-template.json', [{
+        'id': 'TRUTH-001', 'source': 'https://... the published report entry',
+        'severity': 'high', 'title': '', 'root_cause': '',
+        'paths': ['src/Vault.sol:Vault.redeem'], 'notes': 'judge comments, duplicates count, etc.'}])
+    (case / '.gitignore').write_text('*\n', encoding='utf-8')
+    (case / 'README.md').write_text(
+        f'# Backtest case: {name}\n\n'
+        f'Pinned commit: `{pinned}`\n\n'
+        '1. Hunt this commit with the normal workflow. Do not open the published findings.\n'
+        '2. `bounty.py backtest seal --case . --run <run-dir>`\n'
+        '3. Only now transcribe the published findings into `truth.json`.\n'
+        '4. `bounty.py backtest score --case .`, decide the proposed pairs, score again.\n',
+        encoding='utf-8')
+    return {'case': str(case), 'name': name, 'pinned_commit': pinned, 'warnings': warnings,
+            'next': 'hunt the pinned commit without reading the published findings, then seal'}
+
+
+def backtest_seal(case, run):
+    case, run = Path(case).resolve(), Path(run).resolve()
+    meta = read_json(case / 'case.json')
+    if (case / 'seal.json').exists():
+        raise ValueError('this case is already sealed; a second seal would let a hunt be revised '
+                         'after seeing the answers. Start a new case instead.')
+    truth = read_json(case / 'truth.json')
+    if truth:
+        raise ValueError('truth.json already has entries, so this hunt was not blind. '
+                         'This case cannot produce a measurement; start a new one.')
+    findings = read_json(run / 'findings.json')
+    if not isinstance(findings, list):
+        raise ValueError('findings.json must be an array')
+    dump(case / 'sealed-findings.json', findings)
+    for name in ('coverage.md', 'known-hypotheses.md', 'scope.md'):
+        source = run / name
+        if source.is_file():
+            (case / f'sealed-{name}').write_text(source.read_text(encoding='utf-8'),
+                                                 encoding='utf-8')
+    run_meta = read_json(run / 'run.json') if (run / 'run.json').is_file() else {}
+    seal = {'sealed_at': datetime.now(timezone.utc).isoformat(),
+            'sealed_findings_sha256': _sha256_file(case / 'sealed-findings.json'),
+            'finding_count': len(findings), 'run': str(run),
+            'run_commit': run_meta.get('commit'), 'pinned_commit': meta.get('pinned_commit')}
+    if run_meta.get('commit') and run_meta['commit'] != meta.get('pinned_commit'):
+        seal['warning'] = (f"the run was initialised at {run_meta['commit'][:12]}, not the case's "
+                           f"pinned {str(meta.get('pinned_commit'))[:12]}")
+    dump(case / 'seal.json', seal)
+    return {'sealed': str(case / 'sealed-findings.json'), **seal,
+            'next': 'now transcribe the published findings into truth.json, then score'}
+
+
+def backtest_score(case):
+    case = Path(case).resolve()
+    meta = read_json(case / 'case.json')
+    seal_path = case / 'seal.json'
+    if not seal_path.is_file():
+        raise ValueError('nothing sealed: hunt and seal before loading the ground truth')
+    seal = read_json(seal_path)
+    actual = _sha256_file(case / 'sealed-findings.json')
+    if actual != seal['sealed_findings_sha256']:
+        raise ValueError('sealed-findings.json changed after it was sealed; this case is void')
+    truth = read_json(case / 'truth.json')
+    if not truth:
+        return {'state': 'awaiting-truth', 'case': meta.get('name'),
+                'sealed_findings': seal['finding_count'],
+                'next': 'transcribe the published findings into truth.json using '
+                        'truth-template.json, then score again'}
+    findings = read_json(case / 'sealed-findings.json')
+    for i, row in enumerate(truth):
+        if not isinstance(row, dict) or not has_text(row.get('id')):
+            raise ValueError(f'truth[{i}]: id is required')
+        if row.get('severity') not in TRUTH_SEVERITIES:
+            raise ValueError(f"truth[{i}]: severity must be one of "
+                             + ', '.join(sorted(TRUTH_SEVERITIES)))
+
+    decisions_path = case / 'matches.json'
+    existing = {}
+    if decisions_path.is_file():
+        for row in read_json(decisions_path):
+            existing[(row.get('truth_id'), row.get('finding_id'))] = row
+
+    proposals, undecided = [], 0
+    for item in truth:
+        for finding in findings:
+            score, why = _match_score(finding, item)
+            if score < MATCH_THRESHOLD:
+                continue
+            key = (item['id'], finding.get('id'))
+            row = existing.get(key, {})
+            decision = row.get('decision', 'undecided')
+            if decision == 'undecided':
+                undecided += 1
+            proposals.append({
+                'truth_id': item['id'], 'truth_title': item.get('title', '')[:90],
+                'truth_severity': item['severity'], 'finding_id': finding.get('id'),
+                'finding_title': (finding.get('title') or '')[:90],
+                'finding_lens': finding.get('lens'), 'finding_status': finding.get('status'),
+                'overlap_score': round(score, 2), 'overlap_reasons': why,
+                'decision': decision, 'decision_reason': row.get('decision_reason', '')})
+    # keep any decided pair the heuristic no longer proposes, so a judgment is never lost
+    seen = {(p['truth_id'], p['finding_id']) for p in proposals}
+    for key, row in existing.items():
+        if key not in seen and row.get('decision') not in (None, 'undecided'):
+            proposals.append(row)
+    proposals.sort(key=lambda r: (-r['overlap_score'], str(r['truth_id'])))
+    dump(decisions_path, proposals)
+
+    if undecided:
+        return {'state': 'awaiting-decisions', 'case': meta.get('name'),
+                'proposed_pairs': len(proposals), 'undecided': undecided,
+                'matches_file': str(decisions_path),
+                'how': "set each pair's decision to 'same-mechanism', 'related-not-same' or "
+                       "'different', with a one-line decision_reason, then score again. Match on "
+                       'root cause and affected path, never on title similarity.',
+                'notice': 'The heuristic proposes pairs; it does not judge them. A truth entry '
+                          'with no proposal may still have been found - check the misses by hand.'}
+
+    matched = {}
+    for row in proposals:
+        if row.get('decision') == 'same-mechanism':
+            matched.setdefault(row['truth_id'], []).append(row)
+    rediscovered, missed = [], []
+    for item in truth:
+        hits = matched.get(item['id'], [])
+        record = {'id': item['id'], 'severity': item['severity'],
+                  'title': (item.get('title') or '')[:90]}
+        if hits:
+            record['found_by'] = [{'finding_id': h['finding_id'], 'lens': h.get('finding_lens'),
+                                   'status': h.get('finding_status')} for h in hits]
+            rediscovered.append(record)
+        else:
+            record['source'] = item.get('source')
+            missed.append(record)
+
+    matched_finding_ids = {h['finding_id'] for hits in matched.values() for h in hits}
+    unmatched = [{'id': f.get('id'), 'title': (f.get('title') or '')[:90],
+                  'lens': f.get('lens'), 'status': f.get('status'),
+                  'severity': f.get('severity')}
+                 for f in findings if f.get('id') not in matched_finding_ids]
+
+    def tally(entries, key='severity'):
+        out = {}
+        for e in entries:
+            out[e.get(key) or 'unspecified'] = out.get(e.get(key) or 'unspecified', 0) + 1
+        return out
+
+    per_lens = {}
+    for record in rediscovered:
+        for hit in record['found_by']:
+            lens = hit.get('lens') or 'unattributed'
+            per_lens[lens] = per_lens.get(lens, 0) + 1
+
+    serious = [t for t in truth if t['severity'] in ('critical', 'high', 'medium')]
+    serious_found = [r for r in rediscovered if r['severity'] in ('critical', 'high', 'medium')]
+    return {
+        'state': 'scored', 'case': meta.get('name'), 'pinned_commit': meta.get('pinned_commit'),
+        'sealed_at': seal['sealed_at'],
+        'published_findings': len(truth), 'hunt_findings': len(findings),
+        'rediscovered': rediscovered, 'rediscovered_by_severity': tally(rediscovered),
+        'missed': missed, 'missed_by_severity': tally(missed),
+        'serious_rediscovered': f'{len(serious_found)} of {len(serious)}',
+        'credited_lenses': per_lens,
+        'unmatched_hunt_findings': unmatched,
+        'notice': 'Counts, not rates: one case is an anecdote. An unmatched hunt finding is NOT '
+                  'a false positive - contests miss things, judges deduplicate, and scope '
+                  'differs. Judge each unmatched entry separately before calling it wrong. A '
+                  'rediscovery count does not predict a live-bounty payout: contests have no '
+                  'private duplicates, no deployment question and a fixed scope.'}
+
+# --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
 
@@ -1326,6 +1657,21 @@ def build_parser():
     val.add_argument('--token', action='append', default=None)
     val.add_argument('--block', default='latest')
 
+    bt = sub.add_parser('backtest',
+                        help='measure a hunt against already-published findings, blind')
+    bt_sub = bt.add_subparsers(dest='backtest_action', required=True)
+    bt_init = bt_sub.add_parser('init', help='open a case at a pinned commit')
+    bt_init.add_argument('--name', required=True)
+    bt_init.add_argument('--repo', required=True)
+    bt_init.add_argument('--out', required=True)
+    bt_init.add_argument('--commit', default=None, help='the revision the contest covered')
+    bt_init.add_argument('--scope', action='append', default=None)
+    bt_seal = bt_sub.add_parser('seal', help='freeze the hunt output before truth is loaded')
+    bt_seal.add_argument('--case', required=True)
+    bt_seal.add_argument('--run', required=True)
+    bt_score = bt_sub.add_parser('score', help='propose pairs, then score decided ones')
+    bt_score.add_argument('--case', required=True)
+
     sig = sub.add_parser('sig', help='keccak256 function selector of a canonical signature')
     sig.add_argument('signature')
 
@@ -1375,6 +1721,15 @@ def main(argv=None):
         if args.action == 'verify-deployment':
             print(json.dumps(verify_deployment(args.rpc, args.address, args.artifact,
                                                args.block), indent=2))
+            return 0
+        if args.action == 'backtest':
+            if args.backtest_action == 'init':
+                print(json.dumps(backtest_init(args.name, args.repo, args.out, args.commit,
+                                               args.scope), indent=2))
+            elif args.backtest_action == 'seal':
+                print(json.dumps(backtest_seal(args.case, args.run), indent=2))
+            else:
+                print(json.dumps(backtest_score(args.case), indent=2))
             return 0
         if args.action == 'solc-bugs':
             print(json.dumps(solc_bugs(args.repo, args.version), indent=2))

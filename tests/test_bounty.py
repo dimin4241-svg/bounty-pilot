@@ -667,6 +667,19 @@ class BundleTests(unittest.TestCase):
         # Access control and initialization are the categories automated reviewers miss most.
         self.assertEqual(bounty.ATTACK_LENSES[0], 'privileged-path')
 
+    def test_lens_attribution_is_validated_against_the_registry(self):
+        row = bounty.template()
+        row.update(title='t', root_cause='r', affected_paths=['src/Vault.sol'],
+                   bug_class='x-y', revision='abc', attacker_capabilities='a',
+                   preconditions='p', impact='i')
+        run = self.run
+        row['lens'] = 'accounting'
+        bounty.dump(run / 'findings.json', [row])
+        self.assertEqual(bounty.validate(run), [])
+        row['lens'] = 'not-a-lens'
+        bounty.dump(run / 'findings.json', [row])
+        self.assertTrue(any('lens must be one of' in e for e in bounty.validate(run)))
+
     def test_bundles_carry_the_impact_ladder_and_the_precedents(self):
         bounty.bundle(self.repo, self.run, ['economics'])
         text = (self.run / 'bundles/economics-bundle.md').read_text()
@@ -765,6 +778,36 @@ class CompilerBugTests(unittest.TestCase):
         self.assertIn('^0.8.20', found['ranges'])        # range kept separate
         self.assertEqual(found['vyper_sources'], ['src/pool.vy'])
 
+    def test_only_compiler_keys_count_as_compiler_versions(self):
+        # A key called `version` names a compiler only inside a compiler block. Reading it
+        # anywhere reports bugs for a compiler nobody used.
+        cases = [
+            ('foundry.toml', '[profile.default]\nsolc_version = "0.8.26"\n[docs]\n'
+                             'version = "9.9.9"\n', {'0.8.26'}),
+            ('hardhat.config.js', 'module.exports={solidity:{version:"0.8.19"},'
+                                  'plug:{version:"1.2.3"}}', {'0.8.19'}),
+            ('hardhat.config.js', 'solidity: "0.8.17", other: { version: "9.9.9" }', {'0.8.17'}),
+            ('hardhat.config.js', 'solidity:{compilers:[{version:"0.8.20"},{version:"0.7.6"}]},'
+                                  'x:{version:"4.4.4"}', {'0.8.20', '0.7.6'}),
+            ('truffle-config.js', 'compilers:{solc:{version:"0.8.4"}},plugins:{version:"2.0.0"}',
+             {'0.8.4'}),
+            ('package.json', '{"name":"p","version":"1.2.3",'
+                             '"devDependencies":{"solc":"^0.8.24"}}', {'0.8.24'}),
+            ('package.json', '{"name":"p","version":"1.2.3"}', set()),
+            ('package.json', 'not json at all', set()),
+        ]
+        for name, text, expected in cases:
+            self.assertEqual(set(bounty._versions_from_config(name, text)), expected,
+                             f'{name}: {text[:50]}')
+
+    def test_an_unrelated_package_version_never_reaches_the_report(self):
+        (self.repo / 'package.json').write_text(
+            '{"name":"p","version":"1.2.3","devDependencies":{"solc":"0.8.24"}}')
+        commit(self.repo, 'add package.json')
+        found = bounty.collect_compiler_versions(self.repo)
+        self.assertNotIn('1.2.3', found['exact'])
+        self.assertIn('0.8.24', found['exact'])
+
     def test_known_bugs_are_reported_with_severity(self):
         result = bounty.solc_bugs(self.repo, None, self.opener())
         by_version = {c['version']: c for c in result['checked']}
@@ -801,6 +844,130 @@ class CompilerBugTests(unittest.TestCase):
         result = bounty.solc_bugs(self.repo, None, failing)
         self.assertTrue(any('could not fetch' in n for n in result['notes']))
         self.assertIn('0.6.12', result['checked'])
+
+
+class BacktestTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name)
+        self.repo = self.base / 'repo'
+        (self.repo / 'src').mkdir(parents=True)
+        git(self.repo, 'init', '-q')
+        (self.repo / 'src/Vault.sol').write_text('contract Vault { uint256 totalDebt; }\n')
+        commit(self.repo, 'fixture')
+        self.run = self.base / 'run'
+        bounty.initialize(self.repo, self.run)
+        self.case = self.base / 'case'
+
+    def finding(self, ident='BP-001', title='redeem never decrements totalDebt',
+                paths=('src/Vault.sol:Vault.redeem',), lens='accounting'):
+        row = bounty.template()
+        row.update(id=ident, title=title, root_cause='redeem omits the totalDebt decrement',
+                   affected_paths=list(paths), bug_class='aggregate-not-decremented',
+                   revision='abc1234', lens=lens, attacker_capabilities='any caller',
+                   preconditions='an open vault', impact='mint cap bricked', status='verified')
+        return row
+
+    def seal_with(self, findings):
+        bounty.backtest_init('case', self.repo, self.case)
+        bounty.dump(self.run / 'findings.json', findings)
+        return bounty.backtest_seal(self.case, self.run)
+
+    def test_the_case_starts_blind_and_records_the_pinned_commit(self):
+        result = bounty.backtest_init('c', self.repo, self.case, commit='HEAD')
+        self.assertEqual(json.loads((self.case / 'truth.json').read_text()), [])
+        self.assertTrue((self.case / 'truth-template.json').is_file())
+        self.assertEqual(result['warnings'], [])
+
+    def test_sealing_is_refused_once_truth_exists(self):
+        bounty.backtest_init('c', self.repo, self.case)
+        bounty.dump(self.case / 'truth.json', [{'id': 'TRUTH-001', 'severity': 'high'}])
+        bounty.dump(self.run / 'findings.json', [self.finding()])
+        with self.assertRaises(ValueError) as caught:
+            bounty.backtest_seal(self.case, self.run)
+        self.assertIn('not blind', str(caught.exception))
+
+    def test_a_case_cannot_be_sealed_twice(self):
+        self.seal_with([self.finding()])
+        with self.assertRaises(ValueError) as caught:
+            bounty.backtest_seal(self.case, self.run)
+        self.assertIn('already sealed', str(caught.exception))
+
+    def test_scoring_before_sealing_is_refused(self):
+        bounty.backtest_init('c', self.repo, self.case)
+        with self.assertRaises(ValueError):
+            bounty.backtest_score(self.case)
+
+    def test_tampering_with_the_sealed_file_voids_the_case(self):
+        self.seal_with([self.finding()])
+        bounty.dump(self.case / 'sealed-findings.json',
+                    [self.finding(), self.finding('BP-002', 'a convenient extra')])
+        bounty.dump(self.case / 'truth.json',
+                    [{'id': 'T1', 'severity': 'high', 'title': 'x', 'paths': []}])
+        with self.assertRaises(ValueError) as caught:
+            bounty.backtest_score(self.case)
+        self.assertIn('void', str(caught.exception))
+
+    def test_awaiting_truth_then_awaiting_decisions_then_scored(self):
+        self.seal_with([self.finding()])
+        self.assertEqual(bounty.backtest_score(self.case)['state'], 'awaiting-truth')
+
+        bounty.dump(self.case / 'truth.json', [
+            {'id': 'T1', 'severity': 'high', 'title': 'redeem does not decrement totalDebt',
+             'root_cause': 'the redeem path omits the totalDebt decrement',
+             'paths': ['src/Vault.sol:Vault.redeem'], 'source': 'https://example.invalid/1'},
+            {'id': 'T2', 'severity': 'medium', 'title': 'oracle staleness unchecked',
+             'root_cause': 'latestAnswer used without a staleness check',
+             'paths': ['src/Oracle.sol:Oracle.price'], 'source': 'https://example.invalid/2'}])
+
+        pending = bounty.backtest_score(self.case)
+        self.assertEqual(pending['state'], 'awaiting-decisions')
+        self.assertEqual(pending['undecided'], 1)        # only T1 overlaps BP-001
+
+        rows = json.loads((self.case / 'matches.json').read_text())
+        rows[0]['decision'] = 'same-mechanism'
+        rows[0]['decision_reason'] = 'same omitted decrement on the same function'
+        bounty.dump(self.case / 'matches.json', rows)
+
+        scored = bounty.backtest_score(self.case)
+        self.assertEqual(scored['state'], 'scored')
+        self.assertEqual([r['id'] for r in scored['rediscovered']], ['T1'])
+        self.assertEqual([r['id'] for r in scored['missed']], ['T2'])
+        self.assertEqual(scored['serious_rediscovered'], '1 of 2')
+        self.assertEqual(scored['credited_lenses'], {'accounting': 1})
+        self.assertEqual(scored['unmatched_hunt_findings'], [])
+
+    def test_a_rejected_pair_leaves_the_truth_entry_missed(self):
+        self.seal_with([self.finding()])
+        bounty.dump(self.case / 'truth.json', [
+            {'id': 'T1', 'severity': 'high', 'title': 'redeem totalDebt accounting',
+             'root_cause': 'different mechanism on the same function',
+             'paths': ['src/Vault.sol:Vault.redeem']}])
+        bounty.backtest_score(self.case)
+        rows = json.loads((self.case / 'matches.json').read_text())
+        rows[0]['decision'] = 'related-not-same'
+        rows[0]['decision_reason'] = 'same function, different root cause'
+        bounty.dump(self.case / 'matches.json', rows)
+        scored = bounty.backtest_score(self.case)
+        self.assertEqual([r['id'] for r in scored['missed']], ['T1'])
+        self.assertEqual([f['id'] for f in scored['unmatched_hunt_findings']], ['BP-001'])
+
+    def test_unmatched_findings_are_reported_without_being_called_false(self):
+        self.seal_with([self.finding()])
+        bounty.dump(self.case / 'truth.json', [
+            {'id': 'T9', 'severity': 'low', 'title': 'unrelated typo',
+             'root_cause': 'docs', 'paths': ['docs/README.md']}])
+        scored = bounty.backtest_score(self.case)
+        self.assertEqual(scored['state'], 'scored')        # no pairs proposed, nothing to decide
+        self.assertEqual([f['id'] for f in scored['unmatched_hunt_findings']], ['BP-001'])
+        self.assertIn('NOT', scored['notice'])
+
+    def test_truth_entries_are_validated(self):
+        self.seal_with([self.finding()])
+        bounty.dump(self.case / 'truth.json', [{'id': 'T1', 'severity': 'catastrophic'}])
+        with self.assertRaises(ValueError):
+            bounty.backtest_score(self.case)
 
 
 class ValueTests(unittest.TestCase):
@@ -945,6 +1112,9 @@ class CliTests(unittest.TestCase):
                      ['solc-bugs', '--repo', '.'],
                      ['solc-bugs', '--version', '0.8.19'],
                      ['value', '--rpc', 'u', '--address', 'a'],
+                     ['backtest', 'init', '--name', 'n', '--repo', '.', '--out', 'o'],
+                     ['backtest', 'seal', '--case', 'c', '--run', 'r'],
+                     ['backtest', 'score', '--case', 'c'],
                      ['score-target', '--repo', '.', '--program', 'p.json'],
                      ['verify-deployment', '--rpc', 'u', '--address', 'a'],
                      ['sig', 'transfer(address,uint256)'],

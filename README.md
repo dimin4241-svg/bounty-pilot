@@ -200,6 +200,7 @@ Inspect and pin upstream revisions before use. Delegate bounded tasks instead of
 | [Impact classes](skills/bounty-pilot/references/impact-classes.md) | What the payout is for, and where hunters leave money |
 | [Hack patterns](skills/bounty-pilot/references/hack-patterns.md) | Root causes that took real money, with the shape to grep for |
 | [Where hunts stop short](skills/bounty-pilot/references/misses.md) | Twenty near-misses to check against your own output before reporting |
+| [Backtesting](skills/bounty-pilot/references/backtest.md) | The blind protocol for measuring rediscovery against published findings |
 | [Duplicate map](skills/bounty-pilot/references/dup-map.md) | Sources, format and what a collision means |
 | [Audit lenses](skills/bounty-pilot/references/lenses.md) | Classic bug-class checklists per stack |
 | [Evidence rules](skills/bounty-pilot/references/evidence.md) | Candidate records and verification gates |
@@ -241,6 +242,12 @@ python3 $S solc-bugs --repo /path/to/target
 # Which in-scope contract actually holds the money? Severity follows value, not filenames.
 python3 $S value --rpc <read-only-rpc> --address 0x... --token 0x...
 
+# Measure rediscovery against a contest whose findings are already published - blind.
+python3 $S backtest init  --name c4-example --repo /path/to/target --commit <reviewed-commit> \
+  --out private/backtests/c4-example
+python3 $S backtest seal  --case private/backtests/c4-example --run private/runs/c4-example
+python3 $S backtest score --case private/backtests/c4-example
+
 # Gates.
 python3 $S dup-check --run /path/to/private/new-run
 python3 $S check     --run /path/to/private/new-run [--submission]
@@ -258,7 +265,13 @@ python3 -m unittest discover -s tests -v
 ## FAQ
 
 **Will it find more paid bugs?**  
-That has not been measured, and this repository contains no comparative benchmark. What changed is where effort goes: toward unreviewed code, unburned surfaces, what is actually deployed, and the impact class the evidence reaches — and away from re-deriving a program's published known issues. The reasoning is stated so you can disagree with it; it is not a payout guarantee.
+That has not been measured, and this repository ships no benchmark result — but it now ships the
+harness to produce one. `backtest` runs a blind protocol against a contest whose findings are
+already published: it refuses to seal a case whose truth file was populated first, refuses a
+second seal, and voids a case whose sealed output changed afterwards. Run it on a few contests and
+you will have a count instead of an argument. Read
+[backtest.md](skills/bounty-pilot/references/backtest.md) first — a rediscovery count measures the
+hunt, not the funnel, and it does not predict a payout. What changed is where effort goes: toward unreviewed code, unburned surfaces, what is actually deployed, and the impact class the evidence reaches — and away from re-deriving a program's published known issues. The reasoning is stated so you can disagree with it; it is not a payout guarantee.
 
 **What does it do that a code-reading pass cannot?**  
 Three things, each with a precedent. It checks the **compiler** against Solidity's published bug list — a malfunctioning reentrancy guard in specific Vyper versions and a contract compiled without overflow checks are both real nine-figure-adjacent incidents, invisible in the contract. It checks **constants and configuration against the live chain**, where a feed index that names one asset and selects another looks perfectly fine in source. And it reads **balances**, so severity is aimed at the contract holding the treasury rather than the file that sorts first.

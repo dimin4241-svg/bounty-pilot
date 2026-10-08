@@ -11,3 +11,4 @@ program.json
 known-hypotheses.md
 .solidity-auditor/
 .audit-*/
+backtests/
