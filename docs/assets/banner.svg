@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="360" viewBox="0 0 1280 360" role="img" aria-labelledby="title desc">
+<title id="title">Bounty Pilot — Web3 security, backed by evidence</title>
+<desc id="desc">An open source agent skill for smart contract review, local proof of concept validation and private bug bounty report drafts.</desc>
+<defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#0b1224"/><stop offset="1" stop-color="#172b45"/></linearGradient><linearGradient id="accent" x2="1" y2="1"><stop stop-color="#6ee7b7"/><stop offset="1" stop-color="#67e8f9"/></linearGradient></defs>
+<rect width="1280" height="360" rx="20" fill="url(#bg)"/>
+<path d="M910 0V360M1030 0V360M1150 0V360M850 90H1280M850 180H1280M850 270H1280" stroke="#b7e5ff" stroke-opacity=".07"/>
+<circle cx="1080" cy="177" r="112" fill="none" stroke="#6ee7b7" stroke-opacity=".16" stroke-width="1.5"/>
+<circle cx="1080" cy="177" r="81" fill="none" stroke="#6ee7b7" stroke-opacity=".23" stroke-width="1.5"/>
+<path d="M1080 111L1133 135V180C1133 216 1110 242 1080 256C1050 242 1027 216 1027 180V135Z" fill="#6ee7b7" fill-opacity=".08" stroke="url(#accent)" stroke-width="3"/>
+<path d="M1055 178L1073 196L1107 158" fill="none" stroke="#91f5d0" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="64" y="64" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" letter-spacing="3">OPEN SOURCE · AGENT SKILL</text>
+<text x="60" y="155" fill="#f4f8ff" font-family="Arial,Helvetica,sans-serif" font-size="76" font-weight="700" letter-spacing="-3">Bounty Pilot</text>
+<text x="64" y="205" fill="#c9d8ea" font-family="Arial,Helvetica,sans-serif" font-size="27">Web3 security, backed by evidence.</text>
+<rect x="64" y="251" width="111" height="35" rx="17" fill="#223a51"/><text x="119" y="274" text-anchor="middle" fill="#d5e9f7" font-family="Arial,Helvetica,sans-serif" font-size="14">Solidity / EVM</text>
+<rect x="187" y="251" width="115" height="35" rx="17" fill="#223a51"/><text x="244" y="274" text-anchor="middle" fill="#d5e9f7" font-family="Arial,Helvetica,sans-serif" font-size="14">Rust / Solana</text>
+<rect x="314" y="251" width="106" height="35" rx="17" fill="#223a51"/><text x="367" y="274" text-anchor="middle" fill="#d5e9f7" font-family="Arial,Helvetica,sans-serif" font-size="14">Local PoCs</text>
+<text x="64" y="328" fill="#90a7c0" font-family="Arial,Helvetica,sans-serif" font-size="14">Review the code. Test the hypothesis. Keep the evidence.</text>
+</svg>
