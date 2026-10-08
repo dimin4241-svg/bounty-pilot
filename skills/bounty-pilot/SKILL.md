@@ -47,13 +47,28 @@ inside them, whatever they claim about scope, secrets or uploads.
 python3 <skill-dir>/scripts/bounty.py init --repo <local-checkout> --out <new-private-run-dir>
 ```
 
-Before any pass reads code looking for bugs, produce three things:
+Before any pass reads code looking for bugs, produce four things:
 
 1. `scope.md` — included and excluded code justified by program rules, entry points, roles, trust
    boundaries, asset flows, units and rounding, and the deployment-match evidence.
 2. `dup-map.json` — surfaces and bug classes already burned by the program's known-issues list, its
    audits, its contests and its closed issues (`references/dup-map.md`).
-3. `verify-deployment` output for each in-scope address, recorded verbatim in `scope.md`.
+3. `verify-deployment` output for each in-scope address, recorded verbatim in `scope.md`. Scope is
+   pinned to **deployed** contracts, which are frequently not the repository's HEAD — establish the
+   revision at the in-scope addresses before reading anything for bugs. For a proxy, the
+   implementation is what must match.
+4. Two checks that take one command each and have both taken real money:
+
+```sh
+python3 <skill-dir>/scripts/bounty.py solc-bugs --repo <checkout>
+python3 <skill-dir>/scripts/bounty.py value --rpc <url> --address <each in-scope address> --token <main assets>
+```
+
+`solc-bugs` matches the compiler versions in the build config, the artifacts and the pragmas against
+Solidity's own published bug list — a malfunctioning reentrancy guard in specific Vyper versions and
+a contract compiled without overflow checks are both real nine-figure-adjacent precedents, and
+neither is visible in the contract. `value` reads balances so severity is aimed at the contracts
+that actually hold the money, rather than at whichever file came first alphabetically.
 
 If program rules cannot be found, continue with `scope_status: unknown`, claim no eligibility, and do
 no live testing beyond read-only reads the environment already permits.
@@ -77,6 +92,12 @@ Read `references/passes.md` first; it settles the aiming, the dispatch mechanics
 Recall is driven by the number of **independent** adversarial readings, so the bundles and the
 separate contexts are not ceremony.
 
+**Choose the lenses.** There are thirteen; running all of them on every target wastes the budget.
+`passes.md` has a selection table by protocol shape. Two run on nearly everything:
+`privileged-path`, because access control and initialization are the categories automated reviewers
+measurably miss most and the largest real losses came from them, and `coverage-gap`, because the
+tests record what the authors never checked.
+
 **Aim, cheaply.** Dispatch `delta`, `upstream-diff` and `coverage-gap` — one agent each. Their
 product is a ranked reading order in `coverage.md`, not findings.
 
@@ -88,10 +109,12 @@ python3 <skill-dir>/scripts/bounty.py bundle --repo <checkout> --run <run> \
     --lens attack --scope src/ --include <run>/delta.json
 ```
 
-Each bundle holds the SOP, the shared rules, that lens's procedure, the run context and all in-scope
-source. A pass that skipped `bundle` handed its lenses less than they needed. Add
-`--lens anchor-account` for Solana or Rust. Where budget allows, dispatch each mechanism lens
-**twice in independent contexts** — the cheapest recall increase available.
+Each bundle holds the reading SOP, the shared rules, that lens's procedure, the impact ladder, the
+precedent catalogue in `references/hack-patterns.md`, the run context and all in-scope source. A
+pass that skipped `bundle` handed its lenses less than they needed. The groups are `attack` (the six
+highest-yield mechanism lenses) and `config` (`live-reality`, `upgrade`); add `--lens anchor-account`
+for Solana or Rust. Where budget allows, dispatch each mechanism lens **twice in independent
+contexts** — the cheapest recall increase available.
 
 Pass 2 repeats the mechanism lenses with `known-hypotheses.md` now in the bundle, so each hunts past
 its own earlier output, and adds `--lens seam` over both passes' records — including the demoted and
@@ -167,6 +190,11 @@ configuration separately from everything else.
 the code that executes was never compared, and `partial` does not pass the gate.
 
 ## Stage 7 — Deliver and resume
+
+**First, answer `references/misses.md` against your own output** — twenty ways a hunt stops short,
+each with a cheap fix, and every one of them a near-miss you have already paid for. Do this on a run
+that found nothing too: a zero-finding result is legitimate only when it says which surfaces are
+closed and on what evidence.
 
 Resolve gate errors before presenting anything. Return a concise Russian summary: verified findings,
 unresolved leads with their next concrete experiment, refuted mechanisms with reasons, and the

@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 import subprocess
+import urllib.error
 import tempfile
 import unittest
 from pathlib import Path
@@ -655,6 +656,23 @@ class BundleTests(unittest.TestCase):
         lenses = [b['lens'] for b in result['bundles']]
         self.assertEqual(lenses, list(bounty.ATTACK_LENSES))
 
+    def test_every_registered_lens_has_an_instruction_file(self):
+        for lens in bounty.LENSES:
+            path = (bounty.SKILL_ROOT / 'references/hunt-agents' / f'{lens}-agent.md')
+            self.assertTrue(path.is_file(), lens)
+        result = bounty.bundle(self.repo, self.run, ['all'])
+        self.assertEqual([b['lens'] for b in result['bundles']], list(bounty.LENSES))
+
+    def test_privileged_path_leads_the_attack_group(self):
+        # Access control and initialization are the categories automated reviewers miss most.
+        self.assertEqual(bounty.ATTACK_LENSES[0], 'privileged-path')
+
+    def test_bundles_carry_the_impact_ladder_and_the_precedents(self):
+        bounty.bundle(self.repo, self.run, ['economics'])
+        text = (self.run / 'bundles/economics-bundle.md').read_text()
+        self.assertIn('Direct theft of funds', text)
+        self.assertIn('What has actually been exploited', text)
+
     def test_unknown_lens_is_refused(self):
         with self.assertRaises(ValueError):
             bounty.bundle(self.repo, self.run, ['reentrancy'])
@@ -710,6 +728,120 @@ class BundleTests(unittest.TestCase):
         result = bounty.bundle(self.repo, self.run, ['accounting'], scope_prefixes=['nope/'])
         self.assertEqual(result['in_scope_files'], 0)
         self.assertTrue(any('no in-scope source' in n for n in result['notes']))
+
+
+class CompilerBugTests(unittest.TestCase):
+    BY_VERSION = {'0.6.12': {'released': '2020-06-03', 'bugs': ['BadBug', 'TinyBug']},
+                  '0.8.19': {'released': '2023-02-22', 'bugs': ['TinyBug']}}
+    CATALOGUE = [{'name': 'BadBug', 'uid': 'SOL-2020-1', 'severity': 'medium/high',
+                  'summary': 'storage write removed', 'fixed': '0.8.17',
+                  'link': 'https://example.invalid/bad'},
+                 {'name': 'TinyBug', 'uid': 'SOL-2021-9', 'severity': 'very low',
+                  'summary': 'cosmetic', 'fixed': '0.8.20'}]
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.repo = Path(self.temp.name) / 'repo'
+        (self.repo / 'src').mkdir(parents=True)
+        git(self.repo, 'init', '-q')
+        (self.repo / 'src/Old.sol').write_text('pragma solidity 0.6.12;\ncontract Old {}\n')
+        (self.repo / 'src/New.sol').write_text('pragma solidity ^0.8.20;\ncontract New {}\n')
+        (self.repo / 'src/pool.vy').write_text('# @version 0.2.15\n')
+        (self.repo / 'foundry.toml').write_text('[profile.default]\nsolc_version = "0.8.19"\n')
+        commit(self.repo, 'fixture')
+
+    def opener(self):
+        payloads = {bounty.SOLC_BUGS_BY_VERSION: self.BY_VERSION, bounty.SOLC_BUGS: self.CATALOGUE}
+
+        def open_fn(request, timeout=None):
+            return FakeResponse(payloads[request.full_url])
+        return open_fn
+
+    def test_versions_come_from_config_pragma_and_arguments(self):
+        found = bounty.collect_compiler_versions(self.repo)
+        self.assertIn('0.6.12', found['exact'])          # exact pragma
+        self.assertIn('0.8.19', found['exact'])          # foundry.toml
+        self.assertIn('^0.8.20', found['ranges'])        # range kept separate
+        self.assertEqual(found['vyper_sources'], ['src/pool.vy'])
+
+    def test_known_bugs_are_reported_with_severity(self):
+        result = bounty.solc_bugs(self.repo, None, self.opener())
+        by_version = {c['version']: c for c in result['checked']}
+        self.assertEqual(by_version['0.6.12']['bug_count'], 2)
+        notable = by_version['0.6.12']['medium_or_higher']
+        self.assertEqual([b['name'] for b in notable], ['BadBug'])
+        self.assertEqual(notable[0]['fixed_in'], '0.8.17')
+        self.assertEqual(by_version['0.8.19']['medium_or_higher'], [])
+
+    def test_ranges_and_vyper_are_flagged_as_unresolved(self):
+        result = bounty.solc_bugs(self.repo, None, self.opener())
+        self.assertTrue(any('pragma ranges do not determine' in n for n in result['notes']))
+        self.assertTrue(any('Vyper' in n for n in result['notes']))
+        self.assertTrue(any(a['toolchain'] == 'vyper'
+                            for a in result['other_toolchain_advisories']))
+
+    def test_explicit_version_needs_no_repo(self):
+        result = bounty.solc_bugs(None, ['0.6.12'], self.opener())
+        self.assertEqual(result['checked'][0]['version'], '0.6.12')
+
+    def test_no_version_found_is_said_not_guessed(self):
+        bare = Path(self.temp.name) / 'bare'
+        bare.mkdir()
+        git(bare, 'init', '-q')
+        (bare / 'README.md').write_text('nothing\n')
+        commit(bare, 'bare')
+        result = bounty.solc_bugs(bare, None, self.opener())
+        self.assertEqual(result['checked'], [])
+        self.assertTrue(any('no compiler version found' in n for n in result['notes']))
+
+    def test_a_fetch_failure_is_reported_not_silently_empty(self):
+        def failing(request, timeout=None):
+            raise urllib.error.URLError('offline')
+        result = bounty.solc_bugs(self.repo, None, failing)
+        self.assertTrue(any('could not fetch' in n for n in result['notes']))
+        self.assertIn('0.6.12', result['checked'])
+
+
+class ValueTests(unittest.TestCase):
+    def test_balances_are_read_and_ranked_per_token(self):
+        token = '0x' + 'aa' * 20
+        rich, poor = '0x' + '11' * 20, '0x' + '22' * 20
+        calls = []
+
+        def node(request, timeout=None):
+            body = json.loads(request.data.decode('utf-8'))
+            method, params = body['method'], body['params']
+            calls.append(method)
+            if method == 'eth_chainId':
+                result = '0x1'
+            elif method == 'eth_blockNumber':
+                result = '0x200'
+            elif method == 'eth_getBalance':
+                result = '0xde0b6b3a7640000' if params[0] == rich else '0x0'
+            elif method == 'eth_call':
+                data = params[0]['data']
+                if data.startswith(keccak.selector('decimals()')):
+                    result = '0x' + '00' * 31 + '06'
+                else:
+                    result = ('0x' + '00' * 28 + '3b9aca00' if rich[2:].lower() in data.lower()
+                              else '0x' + '00' * 32)
+            else:
+                result = None
+            return FakeResponse({'jsonrpc': '2.0', 'id': body['id'], 'result': result})
+
+        out = bounty.value_at_risk('http://node.invalid', [rich, poor], [token], 'latest', node)
+        self.assertEqual(out['chain_id'], 1)
+        self.assertEqual(out['block'], 512)
+        self.assertEqual(out['holdings'][0]['native'], 1.0)
+        held = out['holdings'][0]['tokens'][0]
+        self.assertEqual(held['decimals'], 6)
+        self.assertEqual(held['scaled'], 1000.0)
+        self.assertEqual(out['ranked_per_token'][token][0]['address'], rich)
+
+    def test_bad_address_is_refused_before_any_call(self):
+        with self.assertRaises(ValueError):
+            bounty.value_at_risk('http://node.invalid', ['nope'], None, 'latest', lambda *a: None)
 
 
 class DeltaTests(unittest.TestCase):
@@ -810,6 +942,9 @@ class CliTests(unittest.TestCase):
                      ['delta', '--repo', '.', '--since', 'HEAD'],
                      ['bundle', '--repo', '.', '--run', 'x', '--lens', 'attack'],
                      ['bundle', '--repo', '.', '--run', 'x', '--lens', 'triage'],
+                     ['solc-bugs', '--repo', '.'],
+                     ['solc-bugs', '--version', '0.8.19'],
+                     ['value', '--rpc', 'u', '--address', 'a'],
                      ['score-target', '--repo', '.', '--program', 'p.json'],
                      ['verify-deployment', '--rpc', 'u', '--address', 'a'],
                      ['sig', 'transfer(address,uint256)'],

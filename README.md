@@ -25,7 +25,7 @@ Bounty Pilot gives a coding agent a repeatable workflow for **Solidity/EVM audit
 It has two halves, and both decide whether a hunt finds anything:
 
 - A **funnel** that settles where to look and what counts as evidence — which target is worth the week, which code the last audit never saw, which surfaces are already burned by published known issues, and whether the bytecode on chain is the code you are reading.
-- A **hunt** of nine aimed lenses, dispatched from assembled bundles over differentiated passes, where generation and refutation are deliberately separate steps: an agent that refutes itself while hunting finds less, and an agent that never refutes itself files reports that triage kills.
+- A **hunt** of thirteen aimed lenses, chosen by protocol shape and dispatched from assembled bundles over differentiated passes, where generation and refutation are deliberately separate steps: an agent that refutes itself while hunting finds less, and an agent that never refutes itself files reports that triage kills.
 - A **two-round objection exchange** after the hunt, in which a triage agent is told to reject each finding and must anchor every objection in quoted code, quoted specification, a named test or a live chain read — and the answers must be anchored too. Both sides carry the same burden, because a one-round review rejects almost everything and you never learn which rejection was wrong.
 
 **It is an agent skill, not a hosted scanner.** Your agent reads the instructions, inspects the target, runs available tools, and records evidence. The included Python helpers organize results, read live chain state and check structure; they do not discover or prove vulnerabilities by themselves.
@@ -102,6 +102,10 @@ Alternatively, copy `skills/bounty-pilot` into your agent's supported skills dir
 
 | Lens | Axis it attacks |
 | --- | --- |
+| `privileged-path` | **Authority** — how an *unprivileged* actor reaches privileged power |
+| `external-call` | **Arbitrary targets** — caller-chosen call targets next to standing approvals |
+| `economics` | **Feasibility** — capital, manipulation cost, extraction, net profit, with live numbers |
+| `upgrade` | **Versions** — storage collisions, uninitialised implementations, proxy admins |
 | `delta` | **Time** — code the last audit never saw |
 | `upstream-diff` | **Lineage** — a fork's own deviation from the canonical upstream |
 | `coverage-gap` | **Observability** — where tests lie, including mocks that mock the subject |
@@ -122,6 +126,8 @@ python3 skills/bounty-pilot/scripts/bounty.py bundle \
 One bundle per lens, one agent per bundle, each in its own context. Recall is driven by the number of **independent** adversarial readings, so where budget allows each mechanism lens is dispatched twice in separate contexts — the cheapest recall increase available. Between passes, investigated mechanisms — including the ones looked for and *not* found — are written to `known-hypotheses.md`, and later passes must hunt past it.
 
 The default budget is **up to three stages**, roughly 18 readings plus triage. It stops at the budget, or after two consecutive passes yield neither a new mechanism nor new coverage. There is no infinite loop and no finding quota — zero verified findings after an honest run is a legitimate result.
+
+Thirteen lenses are not thirteen passes: [`passes.md`](skills/bounty-pilot/references/passes.md) has a selection table by protocol shape (lending, AMM, vault, bridge, router, staking, perps, governance, fork, upgradeable, Solana). Two run on nearly everything — `privileged-path`, because access control and initialization are the categories automated reviewers measurably miss most and the largest real losses came from them, and `coverage-gap`, because the tests record what the authors never checked.
 
 ### Severity is the payout
 
@@ -192,6 +198,8 @@ Inspect and pin upstream revisions before use. Delegate bounded tasks instead of
 | [Adjudication](skills/bounty-pilot/references/adjudicate.md) | The two-round exchange, the five gates, outcomes and promotions |
 | [Triage agent](skills/bounty-pilot/references/triage.md) | The agent paid to reject, and the anchors it must produce |
 | [Impact classes](skills/bounty-pilot/references/impact-classes.md) | What the payout is for, and where hunters leave money |
+| [Hack patterns](skills/bounty-pilot/references/hack-patterns.md) | Root causes that took real money, with the shape to grep for |
+| [Where hunts stop short](skills/bounty-pilot/references/misses.md) | Twenty near-misses to check against your own output before reporting |
 | [Duplicate map](skills/bounty-pilot/references/dup-map.md) | Sources, format and what a collision means |
 | [Audit lenses](skills/bounty-pilot/references/lenses.md) | Classic bug-class checklists per stack |
 | [Evidence rules](skills/bounty-pilot/references/evidence.md) | Candidate records and verification gates |
@@ -227,6 +235,12 @@ python3 $S verify-deployment --rpc <read-only-rpc> --address 0x... \
 python3 $S eth-call --rpc <read-only-rpc> --to 0x... --sig 'markPx(uint32)' --arg 4
 python3 $S sig 'transfer(address,uint256)'
 
+# Was it built by a compiler with known bugs? (Curve 2023, Truebit 2026 were exactly this.)
+python3 $S solc-bugs --repo /path/to/target
+
+# Which in-scope contract actually holds the money? Severity follows value, not filenames.
+python3 $S value --rpc <read-only-rpc> --address 0x... --token 0x...
+
 # Gates.
 python3 $S dup-check --run /path/to/private/new-run
 python3 $S check     --run /path/to/private/new-run [--submission]
@@ -245,6 +259,9 @@ python3 -m unittest discover -s tests -v
 
 **Will it find more paid bugs?**  
 That has not been measured, and this repository contains no comparative benchmark. What changed is where effort goes: toward unreviewed code, unburned surfaces, what is actually deployed, and the impact class the evidence reaches — and away from re-deriving a program's published known issues. The reasoning is stated so you can disagree with it; it is not a payout guarantee.
+
+**What does it do that a code-reading pass cannot?**  
+Three things, each with a precedent. It checks the **compiler** against Solidity's published bug list — a malfunctioning reentrancy guard in specific Vyper versions and a contract compiled without overflow checks are both real nine-figure-adjacent incidents, invisible in the contract. It checks **constants and configuration against the live chain**, where a feed index that names one asset and selects another looks perfectly fine in source. And it reads **balances**, so severity is aimed at the contract holding the treasury rather than the file that sorts first.
 
 **Why does the triage agent have to prove its objections?**  
 Because otherwise the exchange is asymmetric: the finding needs evidence and the rejection needs none. An agent allowed to reject on "probably intended" rejects nearly everything, and a wrongly refuted finding is invisible — you never learn it was real. So an objection carries quoted code, quoted specification, a named test or a live read, or it is withdrawn and recorded as withdrawn.

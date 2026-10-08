@@ -455,11 +455,17 @@ def delta(repo, since, scope_prefixes=None, limit=40):
 # lens bundles
 # --------------------------------------------------------------------------- #
 
-LENSES = ('delta', 'upstream-diff', 'coverage-gap', 'accounting', 'live-reality',
-          'integration-auth', 'liveness', 'anchor-account', 'seam')
+LENSES = ('delta', 'upstream-diff', 'coverage-gap', 'privileged-path', 'accounting',
+          'integration-auth', 'external-call', 'economics', 'liveness', 'upgrade',
+          'live-reality', 'anchor-account', 'seam')
 TRIAGE = 'triage'
 AIM_LENSES = ('delta', 'upstream-diff', 'coverage-gap')
-ATTACK_LENSES = ('accounting', 'integration-auth', 'liveness', 'live-reality')
+# The six highest-yield mechanism lenses. privileged-path leads because access control and
+# initialization are the categories automated reviewers measurably miss most, and the ones
+# the largest real losses came from.
+ATTACK_LENSES = ('privileged-path', 'accounting', 'integration-auth', 'external-call',
+                 'economics', 'liveness')
+CONFIG_LENSES = ('live-reality', 'upgrade')
 BUNDLE_WARN_BYTES = 400_000
 
 BUNDLE_HEADER = """# Hunt bundle: {lens}
@@ -555,11 +561,13 @@ def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
             chosen.extend(AIM_LENSES)
         elif lens == 'attack':
             chosen.extend(ATTACK_LENSES)
+        elif lens == 'config':
+            chosen.extend(CONFIG_LENSES)
         elif lens in LENSES or lens == TRIAGE:
             chosen.append(lens)
         else:
             raise ValueError(f'unknown lens {lens!r}; choose from ' + ', '.join(LENSES)
-                             + f', {TRIAGE}, or the groups aim / attack / all')
+                             + f', {TRIAGE}, or the groups aim / attack / config / all')
     chosen = list(dict.fromkeys(chosen))
     for lens in chosen:
         source_file = (references / f'{TRIAGE}.md' if lens == TRIAGE
@@ -600,17 +608,20 @@ def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
     context_doc = '\n'.join(context)
 
     shared = (references / 'hunt-agents' / '_shared.md').read_text(encoding='utf-8')
-    sop_path = references / 'sop.md'
-    sop = sop_path.read_text(encoding='utf-8') if sop_path.is_file() else ''
+
+    def optional(name):
+        path = references / name
+        return path.read_text(encoding='utf-8') if path.is_file() else ''
+
+    sop = optional('sop.md')
+    impact = optional('impact-classes.md')
+    patterns = optional('hack-patterns.md')
     findings_doc = ''
     findings_path = run / 'findings.json'
     if findings_path.is_file():
         body = findings_path.read_text(encoding='utf-8')
         findings_doc = ('## The records under review\n\nAttack these. Nothing here is '
                         'established.\n\n```json\n' + body.rstrip() + '\n```\n')
-    impact_path = references / 'impact-classes.md'
-    impact = impact_path.read_text(encoding='utf-8') if impact_path.is_file() else ''
-
     written = []
     for lens in chosen:
         if lens == TRIAGE:
@@ -620,8 +631,9 @@ def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
             if sop:
                 pieces.append(sop)
             pieces.append((references / f'{TRIAGE}.md').read_text(encoding='utf-8'))
-            if impact:
-                pieces.append(impact)
+            for extra in (impact, patterns):
+                if extra:
+                    pieces.append(extra)
             if findings_doc:
                 pieces.append(findings_doc)
             if context_doc:
@@ -639,6 +651,11 @@ def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
         if sop:
             pieces.append(sop)
         pieces += [shared, lens_text]
+        # The ladder tells the lens how far to escalate; the precedents make a candidate concrete
+        # and much harder for triage to call theoretical.
+        for extra in (impact, patterns):
+            if extra:
+                pieces.append(extra)
         if lens == 'seam' and findings_doc:
             pieces.append(findings_doc.replace('Attack these. Nothing here is established.',
                                                'The earlier passes produced these. Cross them.'))
@@ -967,6 +984,193 @@ def verify_deployment(rpc, address, artifact=None, block='latest', opener=None):
 
 
 # --------------------------------------------------------------------------- #
+# compiler known-bug check
+# --------------------------------------------------------------------------- #
+
+SOLC_BUGS_BY_VERSION = ('https://raw.githubusercontent.com/ethereum/solidity/develop/'
+                        'docs/bugs_by_version.json')
+SOLC_BUGS = 'https://raw.githubusercontent.com/ethereum/solidity/develop/docs/bugs.json'
+SEVERITY_ORDER = {'very low': 0, 'low': 1, 'low/medium': 2, 'medium': 3,
+                  'medium/high': 4, 'high': 5}
+# Ecosystem advisories that are not in solc's own list. Keep this short and verifiable.
+OTHER_TOOLCHAIN_ADVISORIES = (
+    {'toolchain': 'vyper', 'versions': '0.2.15, 0.2.16, 0.3.0',
+     'issue': 'the reentrancy guard did not work as intended',
+     'precedent': 'exploited across several Curve pools in July 2023'},
+)
+PRAGMA = re.compile(r'pragma\s+solidity\s+([^;]+);')
+EXACT_VERSION = re.compile(r'^\s*(\d+\.\d+\.\d+)\s*$')
+CONFIG_VERSION = re.compile(r'(?:solc_version|solc|version)\s*[=:]\s*[\"\']?v?'
+                            r'(\d+\.\d+\.\d+)')
+
+
+def fetch_json(url, opener=None, timeout=30):
+    request = urllib.request.Request(url, headers={
+        'Accept': 'application/json',
+        'User-Agent': f'bounty-pilot/{skill_version()}'})
+    open_fn = opener or (lambda req, timeout: urllib.request.urlopen(req, timeout=timeout))
+    with open_fn(request, timeout=timeout) as response:
+        return json.loads(response.read().decode('utf-8'))
+
+
+def collect_compiler_versions(root):
+    """Find which compiler actually built this code, and what the source merely asks for."""
+    exact, ranges, sources = {}, {}, {}
+    tracked = [p for p in git(root, 'ls-files', '-z').split('\0') if p]
+
+    def note(version, where):
+        exact.setdefault(version, []).append(where)
+
+    for name in ('foundry.toml', 'hardhat.config.js', 'hardhat.config.ts', 'truffle-config.js',
+                 'remappings.txt', 'package.json'):
+        path = root / name
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding='utf-8', errors='replace')
+        except OSError:
+            continue
+        for match in CONFIG_VERSION.finditer(text):
+            note(match.group(1), name)
+    # Build artifacts carry the authoritative compiler version.
+    artifacts = 0
+    for candidate in sorted(root.glob('out/**/*.json'))[:400]:
+        try:
+            data = json.loads(candidate.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+        version = (data.get('metadata') or {}).get('compiler', {}).get('version')
+        if isinstance(version, str):
+            artifacts += 1
+            note(version.split('+')[0], 'build artifact')
+    for path in tracked:
+        if Path(path).suffix not in ('.sol', '.vy'):
+            continue
+        try:
+            text = (root / path).read_text(encoding='utf-8', errors='replace')
+        except OSError:
+            continue
+        sources[path] = Path(path).suffix
+        for match in PRAGMA.finditer(text):
+            spec = match.group(1).strip()
+            fixed = EXACT_VERSION.match(spec)
+            if fixed:
+                note(fixed.group(1), path)
+            else:
+                ranges.setdefault(spec, []).append(path)
+    return {'exact': {v: sorted(set(w))[:6] for v, w in exact.items()},
+            'ranges': {k: sorted(set(v))[:6] for k, v in ranges.items()},
+            'artifacts_read': artifacts,
+            'vyper_sources': sorted(p for p, suffix in sources.items() if suffix == '.vy')}
+
+
+def solc_bugs(repo=None, versions=None, opener=None):
+    """Check compiler versions against Solidity's own published bug list.
+
+    A compiler bug is a real finding class, not trivia: a malfunctioning reentrancy guard in
+    specific Vyper versions was exploited across Curve pools in 2023, and a contract compiled
+    with a pre-0.8 Solidity lacking overflow checks was drained in 2026.
+    """
+    found = {'exact': {}, 'ranges': {}, 'artifacts_read': 0, 'vyper_sources': []}
+    if repo:
+        root = Path(git(Path(repo).resolve(), 'rev-parse', '--show-toplevel').strip()).resolve()
+        found = collect_compiler_versions(root)
+    for version in versions or []:
+        found['exact'].setdefault(version, []).append('--version argument')
+    if not found['exact'] and not found['ranges']:
+        return {'checked': [], 'notes': ['no compiler version found; pass --version explicitly'],
+                'source': SOLC_BUGS_BY_VERSION}
+    notes = []
+    try:
+        by_version = fetch_json(SOLC_BUGS_BY_VERSION, opener)
+        catalogue = {b['name']: b for b in fetch_json(SOLC_BUGS, opener) if 'name' in b}
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        return {'checked': sorted(found['exact']), 'pragma_ranges': found['ranges'],
+                'notes': [f'could not fetch the official bug list ({exc}); read it at '
+                          f'{SOLC_BUGS_BY_VERSION} and compare by hand'],
+                'other_toolchain_advisories': list(OTHER_TOOLCHAIN_ADVISORIES)}
+    checked = []
+    for version in sorted(found['exact']):
+        entry = by_version.get(version)
+        if entry is None:
+            notes.append(f'{version} is not in the published list (unreleased, nightly, '
+                         'or older than the list goes)')
+            continue
+        bugs = []
+        for name in entry.get('bugs', []):
+            meta = catalogue.get(name, {})
+            bugs.append({'name': name, 'uid': meta.get('uid'),
+                         'severity': meta.get('severity', 'unknown'),
+                         'summary': (meta.get('summary') or '').strip()[:240],
+                         'fixed_in': meta.get('fixed'), 'link': meta.get('link')})
+        bugs.sort(key=lambda b: -SEVERITY_ORDER.get(b['severity'], 0))
+        notable = [b for b in bugs if SEVERITY_ORDER.get(b['severity'], 0) >= 3]
+        checked.append({'version': version, 'seen_in': found['exact'][version],
+                        'released': entry.get('released'), 'bug_count': len(bugs),
+                        'medium_or_higher': notable, 'all_bugs': [b['name'] for b in bugs]})
+    if found['ranges']:
+        notes.append('pragma ranges do not determine the compiled version; the build config or a '
+                     'build artifact does. Resolve each range before relying on it.')
+    if found['vyper_sources']:
+        notes.append(f"{len(found['vyper_sources'])} Vyper source(s) present: solc's list does not "
+                     'cover Vyper, see other_toolchain_advisories and Vyper\'s own releases')
+    return {'checked': checked, 'pragma_ranges': found['ranges'],
+            'artifacts_read': found['artifacts_read'],
+            'other_toolchain_advisories': list(OTHER_TOOLCHAIN_ADVISORIES),
+            'notes': notes, 'source': SOLC_BUGS_BY_VERSION,
+            'notice': 'A listed bug is a lead, not a finding: establish that the affected feature '
+                      'is used on a reachable path, and that this version built the DEPLOYED code.'}
+
+
+# --------------------------------------------------------------------------- #
+# value at risk
+# --------------------------------------------------------------------------- #
+
+def value_at_risk(rpc, addresses, tokens=None, block='latest', opener=None):
+    """Read native and ERC-20 balances so severity can be aimed at the money."""
+    keccak = load_keccak()
+    for address in list(addresses) + list(tokens or []):
+        if not re.fullmatch(r'0x[0-9a-fA-F]{40}', address):
+            raise ValueError(f'{address!r} is not an address')
+    tip = rpc_call(rpc, 'eth_blockNumber', [], opener)
+    pinned = tip if block == 'latest' else (hex(int(block)) if str(block).isdigit() else block)
+    chain_id = int(rpc_call(rpc, 'eth_chainId', [], opener), 16)
+    balance_of = keccak.selector('balanceOf(address)')
+    decimals_sig = keccak.selector('decimals()')
+    token_meta = {}
+    for token in tokens or []:
+        raw = rpc_call(rpc, 'eth_call', [{'to': token, 'data': decimals_sig}, pinned], opener)
+        try:
+            token_meta[token] = int(raw, 16) if raw and raw != '0x' else None
+        except ValueError:
+            token_meta[token] = None
+    rows = []
+    for address in addresses:
+        native = rpc_call(rpc, 'eth_getBalance', [address, pinned], opener) or '0x0'
+        holdings = []
+        for token in tokens or []:
+            data = balance_of + encode_static(['address'], [address]).hex()
+            raw = rpc_call(rpc, 'eth_call', [{'to': token, 'data': data}, pinned], opener)
+            amount = int(raw, 16) if raw and raw != '0x' else 0
+            decimals = token_meta.get(token)
+            holdings.append({'token': token, 'raw': str(amount), 'decimals': decimals,
+                             'scaled': (amount / (10 ** decimals)) if decimals else None})
+        rows.append({'address': address, 'native_wei': str(int(native, 16)),
+                     'native': int(native, 16) / 1e18, 'tokens': holdings})
+    ranked = {}
+    for token in tokens or []:
+        ranked[token] = sorted(
+            ({'address': r['address'],
+              'raw': next(h['raw'] for h in r['tokens'] if h['token'] == token)}
+             for r in rows), key=lambda x: -int(x['raw']))
+    return {'chain_id': chain_id,
+            'block': int(pinned, 16) if str(pinned).startswith('0x') else pinned,
+            'holdings': rows, 'ranked_per_token': ranked,
+            'notice': 'Balances only - no prices are fetched, so totals are not comparable across '
+                      'tokens. Use this to find which contract is the honeypot, and to bound a '
+                      'claimed extraction by what is actually there.'}
+
+# --------------------------------------------------------------------------- #
 # static-type eth_call probe
 # --------------------------------------------------------------------------- #
 
@@ -1110,6 +1314,18 @@ def build_parser():
     dep.add_argument('--artifact', default=None, help='Foundry/Hardhat artifact JSON')
     dep.add_argument('--block', default='latest')
 
+    bugs = sub.add_parser('solc-bugs',
+                          help="check compiler versions against Solidity's published bug list")
+    bugs.add_argument('--repo', default=None)
+    bugs.add_argument('--version', action='append', default=None,
+                      help='exact compiler version to check; repeatable')
+
+    val = sub.add_parser('value', help='read native and ERC-20 balances of in-scope contracts')
+    val.add_argument('--rpc', required=True)
+    val.add_argument('--address', action='append', required=True)
+    val.add_argument('--token', action='append', default=None)
+    val.add_argument('--block', default='latest')
+
     sig = sub.add_parser('sig', help='keccak256 function selector of a canonical signature')
     sig.add_argument('signature')
 
@@ -1159,6 +1375,13 @@ def main(argv=None):
         if args.action == 'verify-deployment':
             print(json.dumps(verify_deployment(args.rpc, args.address, args.artifact,
                                                args.block), indent=2))
+            return 0
+        if args.action == 'solc-bugs':
+            print(json.dumps(solc_bugs(args.repo, args.version), indent=2))
+            return 0
+        if args.action == 'value':
+            print(json.dumps(value_at_risk(args.rpc, args.address, args.token,
+                                           args.block), indent=2))
             return 0
         if args.action == 'sig':
             print(load_keccak().selector(args.signature))

@@ -63,6 +63,18 @@ the same mistake is usually copied.
 
 Then revisit every function where you found something and attack its other branches.
 
+## Two rules that are not negotiable
+
+**Nothing is concluded from a name.** Not a finding, and not a "this is fine". A modifier called
+`onlyOwner`, a function called `safeTransfer`, a variable called `totalDebt` are hypotheses about
+behaviour; quote the lines. This is the measured weakness of automated reviewers and it is the
+cheapest one to correct.
+
+**Read the dependency when the claim depends on it.** If your candidate rests on what a framework,
+token, oracle or base contract does, open that source and read it. An assumption about an external
+system is where the integration bugs are, and it is also where an unsupported candidate gets
+rejected.
+
 ## Falsifiable or it is not a candidate
 
 Each candidate names: the entry point, the capability the attacker already holds, the preconditions,

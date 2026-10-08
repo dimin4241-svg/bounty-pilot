@@ -28,6 +28,14 @@ Preserve these invariants when editing:
   padding, so `hashlib.sha3_256` is not a substitute.
 - **Derived constants stay derived.** Proxy storage slots are computed from their labels, not pasted,
   and the tests assert they equal the published values.
+- **Every registered lens has an instruction file**, and `ATTACK_LENSES` leads with
+  `privileged-path`: access control and initialization are the categories automated reviewers
+  measurably miss most. A test asserts both.
+- **`references/hack-patterns.md` is a pattern library, not a source of record.** Loss figures and
+  attributions are approximate and get revised; a report cites the protocol's own post-mortem.
+  Never add a claim that a protocol was exploited without a source.
+- **`solc-bugs` reads the official list at runtime** rather than bundling a snapshot that would go
+  stale, and reports a fetch failure instead of returning an empty, reassuring result.
 - **No benchmark claims** without a reproducible measurement in the repository.
 
 Skill entry point: `skills/bounty-pilot/SKILL.md`.

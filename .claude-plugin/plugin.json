@@ -1,7 +1,7 @@
 {
   "name": "bounty-pilot",
   "description": "Evidence-driven Web3 bug bounty workflow: target triage, duplicate mapping, deployed-bytecode verification, bundled parallel lens passes, a two-round adversarial objection exchange, reproducible PoCs and submission gating.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "author": {
     "name": "dimin4241-svg"
   },

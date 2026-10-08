@@ -1,12 +1,34 @@
 # How to read code like someone who gets paid for finding bugs
 
-This is not a checklist and it is not output. It is five habits, reached for when their trigger
+This is not a checklist and it is not output. It is eight habits, reached for when their trigger
 fires. Your reply holds only CANDIDATE and LEAD blocks — none of the work below appears in it.
 
 Pattern knowledge finds the bugs everyone finds. These habits find the ones that survived two
 audits, and those are the ones still worth money.
 
 ---
+
+## 0. Never conclude from a name
+
+Before anything else, the rule that corrects the measured weakness of automated reviewers: **they
+reason from identifiers instead of from behaviour.** It produces both halves of the failure — a
+false finding because a variable is called `totalDebt`, and a missed finding because a modifier is
+called `onlyOwner` and nobody read it.
+
+So every conclusion you reach, in a finding *or* in a "this part is fine", is anchored in lines you
+actually read. Specifically distrust:
+
+- `safeX` that may not check a return value, and `tryX` that may swallow one.
+- `onlyOwner` / `onlyRole` / `auth` that may compare the wrong variable, or a role never granted.
+- `total*`, `balance*`, `available*` that may not be what they are summing.
+- `is*` / `has*` / `*Enabled` flags that some public function writes.
+- `_internal` helpers reachable from outside, and `external` functions only reachable internally.
+- `validate*` / `check*` that return a bool nobody reads.
+- `nonReentrant` on the wrapper but not on the inner function another path reaches.
+- A comment or NatSpec asserting an invariant the code does not enforce — that is a confession, not
+  a guarantee.
+
+A name is a hypothesis about the code. Treat it as one.
 
 ## 1. Restate it in plain words — first, always
 
@@ -68,7 +90,31 @@ Then ask the follow-up that turns this into money: **what reads that value to ma
 A mint cap, a solvency check, a price, a share conversion, a liquidation threshold. The harm is
 never the wrong number; it is the decision made from it.
 
-## 5. Escalate before you write it down
+## 5. Read the dependency, do not trust it
+
+The integration's bug is usually a wrong belief about the framework, and it is provable only from
+the framework's own source. A handler that checks `msg.sender == endpoint` is secure only if that
+endpoint will not let an arbitrary address make it call you — and the answer is in the endpoint's
+code, not in the integration's.
+
+So for every external system this code leans on — messaging layer, token, router, oracle, base
+contract, library, precompile — open its source and read both the function this code calls and the
+function it calls back. `lib/` being out of scope makes a bug there unreportable; it does not make
+the integration's assumption about it true.
+
+The same applies to the chain itself: a precompile's actual return shape, a token's actual decimals,
+an oracle's actual cadence. Where the answer is on chain, read it on chain.
+
+## 6. Follow the money
+
+Severity lives where the value is, and files are not value. Before choosing where to spend
+attention, find out which contracts hold or move the most — `value` reads balances, and the
+protocol's docs name the vaults — then weight your reading by what a break in each would cost.
+
+A perfect finding in a contract holding nothing is informational. An ugly one in the contract
+holding the treasury is a Critical. Read the second first.
+
+## 7. Escalate before you write it down
 
 The moment you have something, you are not finished — you are at the *first* consequence, and the
 first consequence is usually the cheapest one. Do three things before the finding leaves your

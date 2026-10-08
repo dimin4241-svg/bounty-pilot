@@ -26,15 +26,42 @@ into `coverage.md` as a ranked reading order, and every later pass is given it. 
 evidenced baseline, say so and review in full — never call an arbitrary recent range the
 post-audit delta.
 
+## Choosing lenses — do not run all thirteen
+
+There are thirteen lenses. Running every one on every target wastes most of the budget on surfaces
+the protocol does not have. Pick by shape, and say in `coverage.md` which you chose and why.
+
+| Target shape | Run first | Then |
+| --- | --- | --- |
+| Lending / CDP / money market | `economics`, `accounting`, `privileged-path` | `live-reality`, `liveness`, `delta` |
+| DEX / AMM / concentrated liquidity | `economics`, `accounting`, `external-call` | `upstream-diff`, `coverage-gap` |
+| Vault / ERC-4626 / yield aggregator | `accounting`, `economics`, `external-call` | `privileged-path`, `liveness` |
+| Bridge / cross-chain messaging | `integration-auth`, `privileged-path`, `external-call` | `live-reality`, `upgrade` |
+| Router / aggregator / zapper | `external-call`, `integration-auth` | `privileged-path`, `accounting` |
+| Staking / LST / restaking | `accounting`, `privileged-path`, `economics` | `liveness`, `upgrade` |
+| Perps / options / structured | `economics`, `accounting`, `live-reality` | `liveness`, `coverage-gap` |
+| Governance / timelock / treasury | `privileged-path`, `upgrade` | `liveness`, `delta` |
+| Any fork of a known upstream | `upstream-diff`, `delta` | the shape's own row |
+| Any upgradeable deployment | `upgrade`, `privileged-path` | the shape's own row |
+| Solana / Anchor program | `anchor-account`, `privileged-path`, `economics` | `coverage-gap` |
+
+Two lenses run on essentially every target, because their yield does not depend on the protocol's
+shape: **`privileged-path`** (access control and initialization are the categories automated
+reviewers measurably miss most, and the largest real losses came from them) and **`coverage-gap`**
+(the tests tell you what the authors never checked).
+
 ## Stage B — Attack (the hunt passes)
 
 ```sh
 python3 $S bundle --repo <checkout> --run <run> --lens attack --scope src/ --include <run>/delta.json
 ```
 
-That writes one bundle per mechanism lens — `accounting`, `integration-auth`, `liveness`,
-`live-reality` — each containing the SOP, the shared rules, that lens's procedure, the run context
-and all in-scope source. Add `--lens anchor-account` for a Solana or Rust target.
+The `attack` group is the six highest-yield mechanism lenses — `privileged-path`, `accounting`,
+`integration-auth`, `external-call`, `economics`, `liveness` — and the `config` group is
+`live-reality` and `upgrade`, which check what is true of the deployment rather than the source. Add
+`--lens anchor-account` for Solana or Rust. Each bundle carries the SOP, the shared rules, that
+lens's procedure, the impact ladder, the precedent catalogue, the run context and all in-scope
+source.
 
 **A pass that did not run `bundle` did not bundle its source**, and a lens reading files
 opportunistically covers less than a lens handed everything. The command is the mechanic, not a
@@ -105,11 +132,24 @@ Stop when any one is true:
 - The planned pass count is spent.
 - Two consecutive passes produce neither a new mechanism nor new coverage. More reading will not
   help; the open leads need experiments.
+- Every lens the shape table calls for has run, and `misses.md` is answered.
 - Every remaining lead is blocked on the same missing capability — a toolchain, an RPC, program
   rules. Report the blocker rather than narrating around it.
 
 There is no finding quota. Zero verified findings after an honest run is a legitimate result, and
 more useful than three inflated ones: say which surfaces you closed and on what evidence.
+
+## Before you report — answer `misses.md`
+
+The last step of the loop is not a pass; it is a check against your own output.
+`references/misses.md` lists twenty ways a hunt stops short, each with a cheap fix: concluding from
+a name, stopping at the first consequence, skipping the privileged path because a checklist said
+"do not report admin can rug", never reading the dependency, never checking the compiler, auditing
+HEAD when scope is pinned to deployed addresses, dropping leads silently, and letting an unanchored
+objection kill a real finding.
+
+Answer every item in writing, including on a run that found nothing. Most are one command or one
+paragraph, and each of them is a near-miss that was already paid for.
 
 ## Budget, honestly
 
