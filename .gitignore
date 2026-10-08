@@ -6,4 +6,8 @@ __pycache__/
 runs/
 private/
 findings.json
+dup-map.json
+program.json
+known-hypotheses.md
 .solidity-auditor/
+.audit-*/

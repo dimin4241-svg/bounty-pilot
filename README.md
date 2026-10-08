@@ -1,68 +1,148 @@
 # Bounty Pilot
 
-**Одна ссылка на репозиторий → проверка scope → аудит → локальный PoC → черновик репорта.**
+**Выбор цели → правила программы и карта дублей → что реально задеплоено → проходы линз → опровержение → локальный PoC → гейт готовности к отправке.**
 
-An evidence-driven Web3 bug bounty workflow for coding agents. Russian progress summaries and English report drafts by default. Original orchestration and checklists; optional integration with Pashov, Trail of Bits, 0xSimao and QuillShield.
+Навык для coding-агента, который ищет баг, за который багбаунти-программа действительно заплатит.
+Прогресс и объяснения по-русски, черновики репортов по-английски. Оригинальная оркестрация;
+опциональная интеграция с Pashov, Trail of Bits, 0xSimao и QuillShield.
 
 ## Быстрый старт
 
-Передайте вашему coding-агенту эту команду:
+Передайте агенту:
 
 > Install https://github.com/dimin4241-svg/bounty-pilot and run Bounty Pilot on https://github.com/OWNER/TARGET. Read skills/bounty-pilot/SKILL.md and follow it. Keep findings private.
 
-Затем в проекте или чате с установленным навыком:
+Дальше, когда навык установлен, достаточно ссылки:
 
 > Bounty Pilot: https://github.com/OWNER/TARGET
 
-Можно просто прислать ссылку в уже начатом аудите. Ссылка на bounty-программу полезна, но не обязательна для начала анализа исходников. Без правил программы и данных о deployment вывод о пригодности к выплате останется неподтверждённым.
+Ссылка на bounty-программу не обязательна для начала анализа исходников, но без правил программы и
+без данных о deployment вывод о пригодности к выплате останется неподтверждённым — находка будет
+помечена как source-review, а не submission-ready.
 
-Это **навык для агента с доступом к файлам, Git и тестам**, а не облачный сканер. Для доказательства багов нужны инструменты целевого проекта: например Foundry, Cargo или локальный Solana test harness. Python 3.9+ и Git нужны только для вспомогательного скрипта. Использование модели оплачивается по условиям вашего агента.
+Это **навык для агента с доступом к файлам, Git и тестам**, а не облачный сканер. Для доказательства
+багов нужны инструменты целевого проекта (Foundry, Cargo, Anchor, локальный валидатор). Python 3.9+
+и Git нужны только для вспомогательных скриптов; внешних зависимостей у них нет. Модель оплачивается
+по условиям вашего агента.
 
-## Что внутри
+## Две половины, и обе обязательны
 
-- До трёх проходов с разными задачами вместо бесконечного повторения одного промпта.
-- Приоритет изменениям кода, движению активов, интеграциям и непроверенным путям.
-- Основные линзы Solidity/EVM, отдельный маршрут Rust/Solana.
-- Учёт гипотез: `hypothesis`, `needs-evidence`, `verified`, `refuted`.
-- Раздельная оценка технической валидности, scope, deployment и публичных известных проблем.
-- Подтверждение через локальный PoC, наблюдаемый результат и контрольный сценарий.
-- Обоснованное опровержение: без автоматического отбрасывания по фразе «скорее всего intended».
-- Черновики репортов на английском; никакой автоматической отправки.
+**Воронка** решает, где смотреть и что считать доказательством:
 
-## Установка вручную
+- `score-target` — приоритет цели по доле кода, появившегося после аудита, по покрытию тестами, по
+  экономике программы (депозит, first-to-report, выплаты) и по тому, есть ли опубликованный список
+  известных проблем. Выводит и свои `unknowns` — вопросы, а не повод округлить вверх.
+- Карта дублей строится **до** первого прохода: известные проблемы программы, прошлые аудиты,
+  результаты контестов. `dup-check` затем механически сверяет находки с ней.
+- `verify-deployment` сравнивает runtime-байткод по адресу с локальной сборкой, резолвит
+  EIP-1967/1822 proxy-слоты и фиксирует chainid, адрес и блок. Репорт против кода, которого нет в
+  мейннете, — самая частая причина отказа.
+- `delta` ранжирует изменения с точного коммита последнего аудита: баги живут в коде, который аудит
+  не видел.
+- `check --submission` отказывает ровно по тем причинам, по которым отказывают программы.
 
-Скопируйте каталог `skills/bounty-pilot` в поддерживаемый вашим агентом каталог skills. Не перезаписывайте существующую установку без просмотра изменений. Если автоматическое обнаружение не поддерживается, укажите агенту полный путь к `skills/bounty-pilot/SKILL.md` и попросите следовать ему. Не нужно устанавливать все внешние наборы.
+**Охота** читает код враждебно, восемь аимед-линз, по проходам:
 
-Агент может читать навык из клона этого репозитория без установки. Поддержка параллельных агентов необязательна: есть последовательный маршрут. Конкретные UI установки зависят от клиента и версии.
+| Линза | Ось |
+| --- | --- |
+| `delta` | время: код, которого аудит не видел |
+| `upstream-diff` | происхождение: отклонение форка от канонического апстрима |
+| `coverage-gap` | наблюдаемость: где тесты врут (мок подменяет то, что и тестируется) |
+| `accounting` | агрегаты: перечисление всех писателей каждого `total*` |
+| `live-reality` | истина: константы и конфиг против живого состояния чейна |
+| `integration-auth` | граница: какие параметры колбэка подконтрольны атакующему |
+| `liveness` | необратимость: дешёвый неотменяемый DoS |
+| `anchor-account` | Solana: подмена аккаунтов, PDA-сиды, CPI-полномочия |
 
-## Вспомогательный скрипт
+Проходы различаются **целью**, а не усилием: проход 1 строит ранжированный список поверхностей,
+проход 2 бьёт по нему механизмами, проход 3 проверяет живую реальность и швы между линзами. Между
+проходами пишется `known-hypotheses.md`, и следующий проход обязан искать механизмы, которых там
+нет — иначе цикл просто переименовывает старые находки.
+
+Генерация и опровержение — **разные** проходы. Во время охоты агент не опровергает себя (это режет
+recall); затем отдельный проход с письменными гейтами пытается убить каждый кандидат.
+
+## Соотношение с pashov/skills solidity-auditor
+
+`solidity-auditor` — сильный генератор кандидатов по классам баг-паттернов Solidity: 12 параллельных
+специалистов, из них 3 ищут швы между линзами, loop-режим с памятью между сканами. На своей оси он
+лучше, чем всё, что здесь есть, и заменять его не нужно.
+
+Но он аудирует **репозиторий**, а submission — это утверждение о **задеплоенной** системе внутри
+**правил программы**. Он не моделирует scope, не проверяет, что в мейннете тот же байткод, не
+сверяется с известными проблемами, не приоритизирует post-audit код, не требует исполняемого PoC
+(его `proof` — трассировка по коду) и работает только с Solidity. Его confidence — самооценка
+модели, а не исполнение.
+
+Рекомендуемая связка: воронка и delta здесь → генерация по Solidity делегируется `solidity-auditor`
+в loop-режиме → собственные линзы по осям, которых у него нет → импорт его FINDING/LEAD как
+`hypothesis` → общий проход опровержения → PoC → dup-check → submission-гейт. Оркестраторы не
+вкладываются друг в друга. Подробности и правила импорта:
+[`references/compare.md`](skills/bounty-pilot/references/compare.md).
+
+## Установка
+
+Через плагин-маркетплейс Claude Code (`/plugin marketplace add dimin4241-svg/bounty-pilot`, затем
+установка плагина `bounty-pilot`) либо вручную: скопировать каталог `skills/bounty-pilot` в
+поддерживаемый агентом каталог skills. Не перезаписывайте существующую установку без просмотра
+изменений. Агент может читать навык прямо из клона, без установки — укажите ему полный путь к
+`skills/bounty-pilot/SKILL.md`. Параллельные агенты не обязательны: есть последовательный маршрут,
+с явным указанием, что независимость обзора при этом теряется.
+
+## Скрипты
 
 ```sh
-python3 skills/bounty-pilot/scripts/bounty.py init --repo /path/to/target --out /path/to/private/new-run
-python3 skills/bounty-pilot/scripts/bounty.py check --run /path/to/private/new-run
+S=skills/bounty-pilot/scripts/bounty.py
+python3 $S init             --repo /path/to/target --out /path/to/private/new-run
+python3 $S score-target     --repo /path/to/target --program run/program.json
+python3 $S delta            --repo /path/to/target --since <audited-commit> --scope src/
+python3 $S verify-deployment --rpc <read-only-rpc> --address 0x... --artifact out/X.sol/X.json
+python3 $S eth-call         --rpc <read-only-rpc> --to 0x... --sig 'markPx(uint32)' --arg 4
+python3 $S sig              'transfer(address,uint256)'
+python3 $S dup-check        --run run
+python3 $S check            --run run [--submission]
 python3 -m unittest discover -s tests -v
 ```
 
-`init` сохраняет commit, состояние рабочей копии, список отслеживаемых файлов и шаблоны. Он не клонирует проект, не выполняет его код и не проводит аудит. Каталог результата должен быть новым и находиться вне целевого проекта и установленного навыка.
+`init` фиксирует коммит, состояние рабочей копии, инвентарь исходников и шаблоны записей. Он не
+клонирует проект, не исполняет его код и не аудирует. Каталог результата должен быть новым и
+находиться вне целевого проекта и вне навыка.
 
-`check` проверяет структуру записей и наличие файлов доказательств. Он **не доказывает истинность находки**, корректность severity, отсутствие приватного дубликата или право на выплату. Пустой список находок также может пройти структурную проверку.
+`eth-call` кодирует только статические типы — для строк, байтов и массивов используйте foundry/cast.
+`verify-deployment` честно различает `exact`, `partial` (та же длина, но байты расходятся — immutables
+или другая сборка), `mismatch` и `unknown`; `partial` не округляется до `exact`.
 
-## Optional upstream modules
+`check` проверяет структуру записей и наличие файлов доказательств. `check --submission` добавляет
+гейты готовности: статус `verified`, scope установлен, `deployment_status` равен `exact`, severity
+с цитатой рубрики программы, минимум два проверенных источника новизны, квантифицированный impact,
+построенная карта дублей. Ни один из них **не доказывает истинность находки**, корректность severity,
+отсутствие приватного дубликата или право на выплату. Пустой список находок проходит структурную
+проверку.
 
-See [integration guidance](skills/bounty-pilot/references/integrations.md). Modules are not bundled or automatically downloaded. Inspect and pin their revisions before use; record which ones actually ran. Do not nest full multi-pass orchestrators. Upstream licenses remain separate.
+## Приватность и ответственное использование
 
-## Privacy and responsible use
+Тесты — локально, в окружении без секретов, в рамках авторизации и правил программы. Никаких
+приватных ключей, никаких транзакций в мейннет, только read-only RPC и локальные форки. Исходники
+цели, находки, логи, PoC и креды не попадают в этот публичный тулкит. Публикация тулкита не
+авторизует раскрытие результатов аудита.
 
-Run tests locally in a secret-free environment, within authorization and program rules. Do not broadcast exploit transactions. Keep target source, findings, logs, PoCs and credentials out of this public toolkit. Publication of the toolkit does not authorize disclosure of audit results.
+## Ограничения
 
-## Limitations
-
-No guaranteed vulnerability discovery, payout, novelty or complete coverage. A local fixture test is not a real-world audit benchmark. Unsupported toolchains and unavailable program/deployment information must be reported, never invented. The built-in non-EVM route is narrower than a dedicated ecosystem audit toolkit.
+Никаких гарантий находки, выплаты, новизны или полноты покрытия. Локальный фикстурный тест — не
+бенчмарк реального аудита, и в репозитории нет сравнительных замеров. Неподдержанные тулчейны и
+недоступные данные о программе или deployment сообщаются, а не придумываются. Встроенный non-EVM
+маршрут уже, чем специализированный тулкит для соответствующей экосистемы. Ноль подтверждённых
+находок после трёх честных проходов — легитимный результат, и он полезнее трёх раздутых.
 
 ## English quick start
 
-Ask your coding agent to read `skills/bounty-pilot/SKILL.md`, then provide the target repository URL and optionally the bounty program URL. It will model scope, perform distinct review passes, validate candidates locally and prepare private report drafts. Change the explanation language in your request if desired.
+Ask your coding agent to read `skills/bounty-pilot/SKILL.md`, then give it the target repository URL
+and optionally the bounty program URL. It will triage the target, read program rules, build a
+duplicate map, verify what is actually deployed, run differentiated hunt passes, adjudicate
+candidates against written gates, validate survivors with local PoCs and prepare private English
+report drafts. Change the explanation language in your request if desired.
 
-## License and attribution
+## Лицензия и атрибуция
 
-Original package: MIT. See [LICENSE](LICENSE) and [SOURCES.md](SOURCES.md). No affiliation with or endorsement by the linked projects is implied.
+Оригинальный пакет: MIT. См. [LICENSE](LICENSE) и [SOURCES.md](SOURCES.md). Никакой аффилиации с
+упомянутыми проектами и никакого их одобрения не подразумевается.

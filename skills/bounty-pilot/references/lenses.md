@@ -1,25 +1,57 @@
 # Audit lenses
 
-For every lens produce a falsifiable hypothesis: entry point, attacker capability, preconditions, state transition, broken property, consequence, and experiment. Derive properties from actual protocol intent; do not paste a generic checklist as a finding.
+Two kinds of lens, and they are used differently.
+
+**Aimed lenses** live in `hunt-agents/` and are dispatched per pass by `passes.md`. Each is a
+procedure over one axis — time, lineage, observability, aggregates, boundary authorization,
+persistence, live truth, the Solana account model — and each produces falsifiable candidates.
+
+**Classic bug-class lenses** are the list below: the standard sweep for well-known vulnerability
+shapes. Select only the relevant ones; a generic checklist pasted into a report is not a finding.
+On Solidity targets this sweep is exactly what `solidity-auditor` does in parallel and in depth, so
+prefer delegating it when installed (see `compare.md`) and spend your own passes on the aimed
+lenses it has no equivalent for.
+
+For every lens, produce: entry point, attacker capability, preconditions, state transition, broken
+property, consequence, experiment. Derive the property from the protocol's actual intent, read from
+its docs, specs and tests — not from a template.
 
 ## Solidity / EVM
 
-- Access lifecycle: creation, initialization, ownership/role transfer, revocation, delegated permissions, callback authority, upgrade authority.
-- Signed intent: signer, account, chain, nonce, deadline, action and parameter binding; compare quoted intent with actual execution order and recipient.
-- Asset accounting: list each asset, actual balance, accounted balance, shares, debt, pending claims and every writer. Reconcile all branches. Separate user loss from protocol debt and harmless dust.
-- Arithmetic: units, decimals, casts, rounding beneficiary, repeated operations, minimum nonzero values, first/last user and exhausted reserves.
-- Time and cohorts: accrual before/after entry or exit, checkpoints, epoch rollover, expiry, cancellation and claim uniqueness.
-- Solvency/liquidations: economic assumptions, price freshness, collateral/debt valuation, bad debt and liquidation reachability; establish feasible capital and liquidity.
-- Integration: external call boundaries, hooks, read-only and cross-contract reentrancy, token behavior actually supported by the project, oracle trust, returndata and gas limits.
-- Liveness: adversarially poisoned queues/batches, retry persistence, restart/recovery behavior, gas growth and griefing cost; measure victim impact and recovery paths.
-- Cross-chain: message identity, domain/source binding, replay state, finality, retries, refund and compensation paths.
+- **Access lifecycle:** creation, initialization, ownership and role transfer, revocation, delegated
+  permissions, callback authority, upgrade authority.
+- **Signed intent:** signer, account, chain, nonce, deadline, action and parameter binding; compare
+  the quoted intent against the executed order and recipient.
+- **Asset accounting:** per asset, the real balance, the accounted balance, shares, debt, pending
+  claims and every writer; reconcile all branches; separate user loss from protocol debt from dust.
+- **Arithmetic:** units, decimals, casts, rounding beneficiary, repeated operations, minimum nonzero
+  values, the first and last user, exhausted reserves.
+- **Time and cohorts:** accrual relative to entry and exit, checkpoints, epoch rollover, expiry,
+  cancellation, claim uniqueness.
+- **Solvency and liquidation:** economic assumptions, price freshness, collateral and debt
+  valuation, bad debt, liquidation reachability, and the capital and liquidity actually required.
+- **Integration:** external call boundaries, hooks, read-only and cross-contract reentrancy, the
+  token behaviours the project really supports, oracle trust, returndata and gas limits.
+- **Liveness:** poisoned queues and batches, retry persistence, restart and recovery, gas growth,
+  griefing cost, victim impact and repair paths.
+- **Cross-chain:** message identity, domain and source binding, replay state, finality, retries,
+  refunds and compensation.
 
 ## Rust / Solana
 
-Use Cargo/Anchor metadata to establish the program boundary and runtime. Inspect signer/writable/owner checks, PDA seeds and bump assumptions, account substitution, cross-program invocation authority, account lifecycle/close/reinitialization, arithmetic and token-program selection. Include Token-2022 extensions only when reachable under supported configuration. Demonstrate account constraints and actual runtime behavior in the appropriate local validator or test harness. Do not label an ordinary Rust panic a chain-wide halt.
+Establish the program boundary and runtime from Cargo and Anchor metadata. Then work the account
+model — signer, writable and owner checks, PDA seeds and bumps, account substitution, CPI authority,
+account lifecycle, close and reinitialisation, arithmetic, token-program selection — with the
+procedure in `hunt-agents/anchor-account-agent.md`. Include Token-2022 extensions only where they are
+reachable in a supported configuration. Demonstrate account constraints and runtime behaviour in a
+local validator or test harness. An ordinary Rust panic is a failed transaction, not a chain halt.
 
-For off-chain Rust inspect untrusted parsing, panic/abort boundaries, persistence/retry state, resource growth, synchronization and unsafe code. Keep chain/runtime semantics explicit.
+For off-chain Rust: untrusted parsing, panic and abort boundaries, persistence and retry state,
+resource growth, synchronisation, and `unsafe`. Keep chain and runtime semantics explicit.
 
 ## Other languages
 
-Build a language-specific model from primary documentation and available tools. State that the package has no specialized built-in checklist for that stack. Do not reuse EVM assumptions for Move, CosmWasm, TON or native bridges. Use language-specific upstream skills only after inspecting compatibility.
+Build the model from primary documentation and the project's own tooling, and state plainly that
+this package has no specialised checklist for that stack. Do not carry EVM assumptions into Move,
+CosmWasm, TON, Cairo or a native bridge. Use an ecosystem-specific upstream skill only after
+checking its compatibility, and record which one ran.

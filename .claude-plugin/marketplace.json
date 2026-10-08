@@ -1,0 +1,14 @@
+{
+  "name": "bounty-pilot",
+  "owner": {
+    "name": "dimin4241-svg",
+    "url": "https://github.com/dimin4241-svg"
+  },
+  "plugins": [
+    {
+      "name": "bounty-pilot",
+      "source": "./",
+      "description": "Evidence-driven Web3 bug bounty workflow with funnel tooling and submission gates."
+    }
+  ]
+}

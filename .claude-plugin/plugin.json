@@ -1,0 +1,11 @@
+{
+  "name": "bounty-pilot",
+  "description": "Evidence-driven Web3 bug bounty workflow: target triage, duplicate mapping, deployed-bytecode verification, parallel lens passes, adversarial adjudication, reproducible PoCs and submission gating.",
+  "version": "0.2.0",
+  "author": {
+    "name": "dimin4241-svg"
+  },
+  "homepage": "https://github.com/dimin4241-svg/bounty-pilot",
+  "license": "MIT",
+  "keywords": ["security", "bug-bounty", "solidity", "evm", "solana", "audit"]
+}
