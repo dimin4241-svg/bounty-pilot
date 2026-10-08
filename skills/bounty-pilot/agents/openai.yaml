@@ -1,0 +1,4 @@
+interface:
+  display_name: "Bounty Pilot"
+  short_description: "Web3 audits with reproducible evidence and triage"
+  default_prompt: "Use $bounty-pilot to audit this repository for bug bounty findings, validate local PoCs, and prepare private English report drafts."

@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.env
+.env.*
+*.log
+runs/
+private/
+findings.json
+.solidity-auditor/
