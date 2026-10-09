@@ -95,14 +95,21 @@ capability: what the attacker holds before the first call, and nothing more
 path: entry -> state change -> harm, each step from code you read
 proof: concrete values, offsets, branch conditions or constants quoted from this source
 breaks: the property that stops holding, in one plain sentence
-experiment: the single command or read that confirms or kills this
-blockers: what is not established yet (reachability, deployed config, economics)
+next_experiment:
+  question: the specific unknown that matters next
+  method: one command, test, or authoritative read to resolve it
+  expected_evidence: the observation that would confirm or kill the mechanism
+  blocker: optional; exact missing access or capability if the experiment cannot run
 ```
 
 ```
 LEAD | lens: <lens-name> | surface: <path:Contract.function> | bug_class: <kebab-case>
 smell: what is wrong-looking, from the code
-open: the specific unknown that would turn this into a candidate or kill it
+next_experiment:
+  question: the specific unknown that would turn this into a candidate or kill it
+  method: one command, test, or authoritative read to resolve it
+  expected_evidence: the observation that would confirm or kill the mechanism
+  blocker: optional; exact missing access or capability if the experiment cannot run
 ```
 
 `bug_class` is a reusable kebab-case label (`aggregate-not-decremented`, `unvalidated-compose-sender`,

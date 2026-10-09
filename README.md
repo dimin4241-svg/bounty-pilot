@@ -79,7 +79,7 @@ Alternatively, copy `skills/bounty-pilot` into your agent's supported skills dir
 | **Deployed-code verification** | Compares on-chain runtime bytecode with a local build, resolves EIP-1967/1822 proxy slots, pins one block per run, and separates `exact` from `partial` honestly |
 | **Live-constant checks** | Reads a hardcoded index, address, decimal or feed id against live chain state, because a constant is a claim about the outside world |
 | **Eight aimed lenses** | Hunts time, lineage, observability, aggregates, parameter authorization, persistence, live truth and the Solana account model |
-| **Separated generation and refutation** | Hunt passes state claims at full strength; a later pass attacks each one against five written gates |
+| **Separated generation and refutation** | Hunt passes state claims at full strength; a later pass attacks each one against five triage gates plus a separate evidence check |
 | **Evidence requirements** | A verified finding needs a local PoC, exit code, log, assertion, negative control and a source-integrity explanation |
 | **Submission gate** | Refuses what programs actually reject: undeployed revision, unestablished scope, unassessed severity, no rubric citation, thin novelty check, unquantified impact |
 | **Resumable findings** | Preserves hypotheses and rejection reasons; reopens a candidate when the protection that refuted it is edited |
