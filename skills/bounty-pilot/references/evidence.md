@@ -22,6 +22,17 @@ cause together.
   `verify-deployment` reported it. Never set `exact` by hand.
 - `novelty.status`: `not-checked` | `no-public-match-found` | `matched-public-issue`, with
   `novelty.sources` listing URLs and the comparison you made at each.
+- `next_experiment`: required for `hypothesis` and `needs-evidence`; it must name a decisive
+  `question`, a reproducible `method`, and the `expected_evidence`. Add `blocker` when the test
+  cannot run yet. `queue --run` lists these leads; a queued experiment is not an attempted test.
+- `history_review`: record the private-ledger comparison before submission. Use
+  `no-match` only after `history check` reports none; use `different-root-cause` with prior case IDs
+  and a concrete mechanism comparison; use `regression` only with `evidence` citing how the issue
+  was reintroduced in the current deployment. `same-mechanism` blocks submission. `unchecked` and
+  `unavailable` also block it.
+  The submission gate requires a fresh `history-matches.json`; it checks a fingerprint of each
+  candidate's id, status, bug class, affected paths and root cause. Rerun `history check` after any
+  of those fields changes, and account for every case it detected.
 
 ## Evidence fields, required for `verified`
 
@@ -69,6 +80,8 @@ point-in-time evidence about one block, not proof about every deployment state.
 ```sh
 python3 <skill-dir>/scripts/bounty.py check --run <run>               # structure and artifacts
 python3 <skill-dir>/scripts/bounty.py dup-check --run <run>           # burned surfaces
+python3 <skill-dir>/scripts/bounty.py history check --run <run>       # private prior reports
+python3 <skill-dir>/scripts/bounty.py queue --run <run>               # every open lead
 python3 <skill-dir>/scripts/bounty.py check --run <run> --submission  # readiness gates
 ```
 
@@ -77,7 +90,9 @@ the artifacts exist. The submission gate additionally refuses what programs actu
 status other than `verified`, scope that is not established, a `deployment_status` other than
 `exact` or `not-applicable`, an unassessed severity, a severity with no rubric citation, fewer than
 two checked novelty sources, missing impact quantification, a run with no dup map built, no triage
-exchange, and any sustained objection.
+exchange, an unchecked personal history review, a missing or stale personal-history result, a
+detected personal match that is not accounted for, a same-mechanism history match, open leads without
+their next experiment, and any sustained objection.
 
 On `deployment_status`: only `verify-deployment` sets it. For a proxy, the **implementation** must
 match — a proxy whose own runtime matches the artifact is reported as `partial`, because the code
@@ -85,4 +100,6 @@ that executes was never compared.
 
 **Neither checker establishes that a finding is real.** They cannot run your PoC, judge your
 severity, see a private duplicate, or read the program's mind. An empty findings file passes the
-structural check. Treat a green gate as "nothing is obviously missing", never as "this is valid".
+structural check. Personal history matching is a recall-oriented aid: it cannot see another
+researcher's private queue and does not adjudicate whether two root causes are the same. Treat a
+green gate as "nothing is obviously missing", never as "this is valid".

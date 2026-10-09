@@ -123,7 +123,16 @@ untraced, dependencies unopened. That list is the honest answer to "what did thi
 where the next pass aims.
 
 Update `coverage.md` with which lenses actually ran, how many readings each got, and what each
-closed. A lens you could not dispatch is reported, never silently skipped.
+closed. A lens you could not dispatch is reported, never silently skipped. Then run:
+
+```sh
+python3 $S queue --run <run>
+python3 $S history check --run <run>
+```
+
+Run the cheapest decisive queued test before another broad pass. Review same-project history matches
+for exact repeats; use them to steer later passes toward distinct root causes. A shared path is not a
+reason to drop a lead, and a similar pattern in another repository is context, not a duplicate.
 
 ## Stop rules
 

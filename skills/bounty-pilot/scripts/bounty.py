@@ -6,13 +6,16 @@ Nothing here audits code or proves a finding. Every subcommand reports what it
 observed and labels what it could not establish.
 """
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
 import re
 import subprocess
 import sys
+import uuid
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,6 +55,14 @@ DEPLOY_STATUSES = {'unknown', 'exact', 'partial', 'mismatch', 'not-applicable'}
 NOVELTY_STATUSES = {'not-checked', 'no-public-match-found', 'matched-public-issue'}
 GATES = {'interruption', 'reachability', 'trigger', 'harm', 'eligibility', 'evidence'}
 OBJECTION_OUTCOMES = {'answered', 'sustained', 'withdrawn'}
+HISTORY_SCHEMA = 1
+HISTORY_DISPOSITIONS = {'submitted', 'pending', 'accepted', 'paid', 'duplicate',
+                        'invalid', 'out-of-scope', 'rejected', 'withdrawn'}
+HISTORY_REASONS = {'private-duplicate', 'public-known-issue', 'out-of-scope',
+                   'impact-not-met', 'not-reproducible', 'severity-dispute', 'other',
+                   'unspecified'}
+HISTORY_REVIEW_STATUSES = {'unchecked', 'no-match', 'different-root-cause', 'regression',
+                           'same-mechanism', 'unavailable'}
 REQUIRED = ('id', 'title', 'status', 'severity', 'bug_class', 'revision', 'root_cause',
             'affected_paths', 'attacker_capabilities', 'preconditions', 'impact',
             'scope_status', 'deployment_status', 'novelty', 'evidence', 'objections',
@@ -96,6 +107,33 @@ def skill_version():
         return 'unknown'
 
 
+def canonical_project(value):
+    """Return a credential-free host/repository key from an HTTPS, SSH or owner/repo URL."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw = value.strip()
+    scp = re.match(r'^(?:[^@/:]+@)?([^/:]+):(.+)$', raw)
+    if scp and '://' not in raw:
+        host, path = scp.group(1), scp.group(2)
+    elif '://' in raw:
+        parsed = urllib.parse.urlsplit(raw)
+        host, path = parsed.hostname or '', parsed.path
+    elif '/' in raw:
+        host, path = raw.split('/', 1)
+    else:
+        return None
+    host = host.lower().strip()
+    path = path.strip('/').removesuffix('.git').lower()
+    if not host or not path or any(c.isspace() for c in host + path):
+        return None
+    return host + '/' + path
+
+
+def project_for_repo(repo):
+    remote = git(repo, 'remote', 'get-url', 'origin', check=False).strip()
+    return canonical_project(remote)
+
+
 # --------------------------------------------------------------------------- #
 # init
 # --------------------------------------------------------------------------- #
@@ -108,6 +146,8 @@ def template():
                 novelty={'status': 'not-checked', 'sources': []},
                 evidence={}, next_experiment={'question': '', 'method': '', 'expected_evidence': '',
                                               'blocker': ''},
+                history_review={'status': 'unchecked', 'case_ids': [], 'rationale': '',
+                                'evidence': ''},
                 objections=[], rejection_reason='')
 
 
@@ -127,7 +167,9 @@ def initialize(repo, out):
     dump(out / 'run.json', {
         'schema_version': SCHEMA_VERSION, 'skill_version': skill_version(),
         'created_at': datetime.now(timezone.utc).isoformat(),
-        'target_root': str(root), 'commit': commit, 'dirty': dirty,
+        'run_id': uuid.uuid4().hex,
+        'target_root': str(root), 'project_key': project_for_repo(root),
+        'commit': commit, 'dirty': dirty,
         'scope_status': 'unknown', 'deployment_status': 'unknown', 'max_passes': 3,
         'audited_revision': None,
         'inventory_kind': 'tracked-source-candidates-not-authorized-scope',
@@ -147,8 +189,396 @@ def initialize(repo, out):
         '# Known hypotheses\n\nAppend one line per investigated mechanism after every pass:\n'
         '`surface | bug-class | status | why it is closed or still open`.\n'
         'Later passes read this file and must hunt mechanisms absent from it.\n', encoding='utf-8')
-    return {'run': str(out), 'commit': commit, 'dirty': dirty,
+    return {'run': str(out), 'run_id': read_json(out / 'run.json')['run_id'],
+            'project_key': project_for_repo(root), 'commit': commit, 'dirty': dirty,
             'source_candidates': len(source), 'schema_version': SCHEMA_VERSION}
+
+
+# --------------------------------------------------------------------------- #
+# private report history
+# --------------------------------------------------------------------------- #
+
+def default_history_path():
+    return Path.home() / '.bounty-pilot' / 'history.jsonl'
+
+
+def _history_path(value=None, target_root=None, run_dir=None):
+    path = Path(value).expanduser() if value else default_history_path()
+    if path.is_symlink() or (path.parent.exists() and path.parent.is_symlink()):
+        raise ValueError('History file must not be a symlink')
+    resolved = path.resolve()
+    protected = [SKILL_ROOT]
+    if target_root:
+        protected.append(Path(target_root).resolve())
+    if run_dir:
+        protected.append(Path(run_dir).resolve())
+    cwd_repo = git(Path.cwd(), 'rev-parse', '--show-toplevel', check=False).strip()
+    if cwd_repo:
+        protected.append(Path(cwd_repo).resolve())
+    for root in protected:
+        if resolved == root or root in resolved.parents:
+            raise ValueError('Keep the private history file outside the target, run and skill')
+    return resolved
+
+
+def _history_rows(path):
+    if not path.exists():
+        return []
+    rows = []
+    for number, line in enumerate(path.read_text(encoding='utf-8').splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f'history line {number} is not valid JSON') from exc
+        required = ('case_id', 'recorded_at', 'project_key', 'finding_id', 'bug_class',
+                    'affected_paths', 'root_cause_summary', 'disposition')
+        if not isinstance(row, dict) or row.get('schema_version') != HISTORY_SCHEMA:
+            raise ValueError(f'history line {number} has an unsupported record schema')
+        missing = [key for key in required if key not in row]
+        if missing:
+            raise ValueError(f'history line {number} is missing: ' + ', '.join(missing))
+        if (not isinstance(row['disposition'], str) or
+                row['disposition'] not in HISTORY_DISPOSITIONS):
+            raise ValueError(f'history line {number} has an invalid disposition')
+        if (not isinstance(row['case_id'], str) or not row['case_id'] or
+                not isinstance(row['finding_id'], str) or not row['finding_id'] or
+                not isinstance(row['project_key'], str) or
+                canonical_project(row['project_key']) != row['project_key'] or
+                not isinstance(row['bug_class'], str) or
+                not re.fullmatch(r'[a-z0-9]+(-[a-z0-9]+)*', row['bug_class']) or
+                not isinstance(row['root_cause_summary'], str) or
+                len(row['root_cause_summary']) > 500 or
+                not isinstance(row['recorded_at'], str)):
+            raise ValueError(f'history line {number} has invalid field types or values')
+        reason = row.get('reason', 'unspecified')
+        if (not isinstance(reason, str) or reason not in HISTORY_REASONS or
+                not isinstance(row.get('program', ''), str) or
+                not isinstance(row.get('lens', 'unattributed'), str) or
+                not isinstance(row.get('revision', ''), str)):
+            raise ValueError(f'history line {number} has invalid optional fields')
+        if (not isinstance(row['affected_paths'], list) or not row['affected_paths'] or
+                not all(isinstance(item, str) and item.strip() for item in row['affected_paths'])):
+            raise ValueError(f'history line {number} has invalid affected_paths')
+        rows.append(row)
+    return rows
+
+
+def _private_history_file(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path == default_history_path():
+        path.parent.chmod(0o700)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+    flags |= getattr(os, 'O_NOFOLLOW', 0)
+    fd = os.open(str(path), flags, 0o600)
+    try:
+        fchmod = getattr(os, 'fchmod', None)
+        if callable(fchmod):
+            fchmod(fd, 0o600)
+        else:  # os.fchmod is not available on every supported platform.
+            os.chmod(str(path), 0o600)
+    finally:
+        os.close(fd)
+
+
+def _append_history(path, event):
+    _private_history_file(path)
+    flags = os.O_WRONLY | os.O_APPEND | getattr(os, 'O_NOFOLLOW', 0)
+    fd = os.open(str(path), flags)
+    with os.fdopen(fd, 'a', encoding='utf-8') as out:
+        out.write(json.dumps(event, ensure_ascii=False, separators=(',', ':')) + '\n')
+
+
+def history_record(run, finding_id, disposition, ledger=None, project=None, program='',
+                   case_id=None, reason='unspecified', hours=None):
+    if disposition not in HISTORY_DISPOSITIONS:
+        raise ValueError('Invalid disposition: ' + str(disposition))
+    if reason not in HISTORY_REASONS:
+        raise ValueError('Invalid reason category: ' + str(reason))
+    run = Path(run).resolve()
+    meta = read_json(run / 'run.json')
+    records = read_json(run / 'findings.json')
+    matches = [row for row in records if isinstance(row, dict) and row.get('id') == finding_id]
+    if len(matches) != 1:
+        raise ValueError('Finding id must identify exactly one record in findings.json')
+    finding = matches[0]
+    if finding.get('status') != 'verified':
+        raise ValueError('Only a verified finding can be recorded as a submitted report')
+    record_errors = []
+    _check_record(finding, 'finding', run, set(), record_errors)
+    if record_errors:
+        raise ValueError('Fix the finding record before adding it to history: '
+                         + '; '.join(record_errors))
+    target_root = meta.get('target_root')
+    project_key = (canonical_project(project) if project else
+                   meta.get('history_project_key') or meta.get('project_key'))
+    if not project_key and target_root and Path(target_root).is_dir():
+        project_key = project_for_repo(target_root)
+    if not project_key:
+        raise ValueError('No canonical repository remote in run.json; pass --project owner/repo')
+    if program and (len(program) > 120 or any(ord(c) < 32 for c in program)):
+        raise ValueError('Program label must be plain text of at most 120 characters')
+    if hours is not None:
+        try:
+            hours = float(hours)
+        except (TypeError, ValueError) as exc:
+            raise ValueError('--hours must be a non-negative number') from exc
+        if hours < 0 or hours == float('inf') or hours != hours:
+            raise ValueError('--hours must be a finite non-negative number')
+    path = _history_path(ledger, target_root=target_root, run_dir=run)
+    rows = _history_rows(path)
+    if meta.get('history_project_key') != project_key:
+        meta['history_project_key'] = project_key
+        dump(run / 'run.json', meta)
+    latest = {row['case_id']: row for row in rows}
+    if case_id:
+        prior = latest.get(case_id)
+        if not prior:
+            raise ValueError('Unknown --case-id; omit it to start a new report record')
+        if (prior['project_key'] != project_key or
+                prior['bug_class'] != finding.get('bug_class') or
+                prior['finding_id'] != finding_id):
+            raise ValueError('--case-id belongs to a different report, project or bug class')
+    else:
+        case_id = 'H-' + uuid.uuid4().hex[:12]
+    event = {
+        'schema_version': HISTORY_SCHEMA, 'case_id': case_id,
+        'recorded_at': datetime.now(timezone.utc).isoformat(),
+        'run_id': meta.get('run_id'), 'project_key': project_key,
+        'program': program.strip(), 'finding_id': finding_id,
+        'revision': finding.get('revision', ''), 'bug_class': finding.get('bug_class', ''),
+        'lens': finding.get('lens') or 'unattributed',
+        'affected_paths': finding.get('affected_paths', []),
+        'root_cause_summary': finding.get('root_cause', '')[:500],
+        'severity': finding.get('severity', 'unassessed'),
+        'disposition': disposition, 'reason': reason, 'effort_hours': hours,
+    }
+    _append_history(path, event)
+    return {'case_id': case_id, 'disposition': disposition, 'history': str(path),
+            'stored_fields': sorted(event),
+            'notice': 'Private local metadata only; no report text, source, PoC, wallet or credentials.'}
+
+
+def history_import(project, finding_id, bug_class, surfaces, root_cause, disposition,
+                   ledger=None, program='', case_id=None, reason='unspecified', hours=None,
+                   lens='unattributed'):
+    project_key = canonical_project(project)
+    if not project_key:
+        raise ValueError('--project must be a repository URL or host/owner/repo key')
+    if disposition not in HISTORY_DISPOSITIONS or reason not in HISTORY_REASONS:
+        raise ValueError('Invalid disposition or reason category')
+    if not isinstance(finding_id, str) or not finding_id.strip() or len(finding_id) > 120:
+        raise ValueError('--finding-id must be nonempty and at most 120 characters')
+    if not isinstance(bug_class, str) or not re.fullmatch(r'[a-z0-9]+(-[a-z0-9]+)*', bug_class):
+        raise ValueError('--bug-class must be a kebab-case label')
+    if not isinstance(surfaces, list) or not surfaces or not all(has_text(x) for x in surfaces):
+        raise ValueError('At least one --surface is required')
+    if any(len(x) > 240 or any(ord(c) < 32 for c in x) for x in surfaces):
+        raise ValueError('Each --surface must be plain text of at most 240 characters')
+    if not has_text(root_cause) or len(root_cause) > 500:
+        raise ValueError('--root-cause must be a short mechanism summary (1-500 characters)')
+    if program and (len(program) > 120 or any(ord(c) < 32 for c in program)):
+        raise ValueError('--program must be plain text of at most 120 characters')
+    if lens and lens not in LENSES and lens not in ('manual', 'unattributed'):
+        raise ValueError('--lens must name a registered lens or manual')
+    if hours is not None:
+        try:
+            hours = float(hours)
+        except (TypeError, ValueError) as exc:
+            raise ValueError('--hours must be a finite non-negative number') from exc
+        if hours < 0 or hours == float('inf') or hours != hours:
+            raise ValueError('--hours must be a finite non-negative number')
+    path = _history_path(ledger)
+    old = _latest_history(_history_rows(path))
+    if case_id:
+        prior = next((row for row in old if row['case_id'] == case_id), None)
+        if not prior:
+            raise ValueError('Unknown --case-id; omit it to start a new report record')
+        if (prior['project_key'] != project_key or prior['bug_class'] != bug_class or
+                prior['finding_id'] != finding_id.strip()):
+            raise ValueError('--case-id belongs to a different report, project or bug class')
+    else:
+        case_id = 'H-' + uuid.uuid4().hex[:12]
+    event = {
+        'schema_version': HISTORY_SCHEMA, 'case_id': case_id,
+        'recorded_at': datetime.now(timezone.utc).isoformat(), 'run_id': None,
+        'project_key': project_key, 'program': program.strip(), 'finding_id': finding_id.strip(),
+        'revision': '', 'bug_class': bug_class, 'lens': lens or 'unattributed',
+        'affected_paths': surfaces, 'root_cause_summary': root_cause.strip(),
+        'severity': 'unassessed', 'disposition': disposition, 'reason': reason,
+        'effort_hours': hours,
+    }
+    _append_history(path, event)
+    return {'case_id': case_id, 'disposition': disposition, 'history': str(path),
+            'notice': 'Imported as private metadata; verify every field against the original record.'}
+
+
+def _latest_history(rows):
+    latest = {}
+    for row in rows:
+        latest[row['case_id']] = row
+    return list(latest.values())
+
+
+def _history_input_digest(records):
+    """Fingerprint only the candidate fields used by the personal-history comparison."""
+    inputs = []
+    for row in records:
+        if not isinstance(row, dict) or row.get('status') == 'refuted':
+            continue
+        inputs.append({key: row.get(key) for key in
+                       ('id', 'status', 'bug_class', 'affected_paths', 'root_cause')})
+    inputs.sort(key=lambda row: str(row.get('id', '')))
+    payload = json.dumps(inputs, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    return hashlib.sha256(payload.encode('utf-8')).hexdigest()
+
+
+def _mechanism_overlap(left, right):
+    tokens = lambda value: {w for w in re.findall(r'[a-z0-9]+', str(value).lower()) if len(w) > 2}
+    a, b = tokens(left), tokens(right)
+    shared = a & b
+    return len(shared) / min(len(a), len(b)) if shared and a and b else 0.0
+
+
+def history_check(run, ledger=None, project=None):
+    run = Path(run).resolve()
+    meta = read_json(run / 'run.json')
+    target_root = meta.get('target_root')
+    path = _history_path(ledger, target_root=target_root, run_dir=run)
+    project_key = (canonical_project(project) if project else
+                   meta.get('history_project_key') or meta.get('project_key'))
+    if not project_key and target_root and Path(target_root).is_dir():
+        project_key = project_for_repo(target_root)
+    if not project_key:
+        raise ValueError('No canonical repository remote in run.json; pass --project owner/repo')
+    records = read_json(run / 'findings.json')
+    if not isinstance(records, list):
+        raise ValueError('findings.json must be an array')
+    history = _history_rows(path)
+    _private_history_file(path)
+    old = _latest_history(history)
+    prior_cases = [row for row in old if row.get('project_key') == project_key]
+    prior_cases.sort(key=lambda row: str(row.get('recorded_at', '')), reverse=True)
+    prior_case_fields = ('case_id', 'finding_id', 'recorded_at', 'revision', 'program', 'bug_class',
+                         'lens', 'affected_paths', 'root_cause_summary', 'severity',
+                         'disposition', 'reason')
+    prior_case_summaries = [
+        {key: row.get(key) for key in prior_case_fields}
+        for row in prior_cases
+    ]
+    matches = []
+    for finding in records:
+        if not isinstance(finding, dict) or finding.get('status') == 'refuted':
+            continue
+        current_paths = _path_keys(finding.get('affected_paths'))
+        current_class = str(finding.get('bug_class', '')).lower()
+        current_cause = finding.get('root_cause', '')
+        for prior in old:
+            if (prior.get('run_id') == meta.get('run_id') and
+                    prior.get('finding_id') == finding.get('id')):
+                continue
+            same_project = prior.get('project_key') == project_key
+            prior_paths = _path_keys(prior.get('affected_paths'))
+            shared_paths = sorted(current_paths & prior_paths)
+            same_class = bool(current_class and current_class == prior.get('bug_class', '').lower())
+            cause_overlap = _mechanism_overlap(current_cause,
+                                               prior.get('root_cause_summary', ''))
+            basis = []
+            if same_project:
+                if same_class:
+                    basis.append('same bug class')
+                if shared_paths:
+                    basis.append('same path/symbol: ' + ', '.join(shared_paths[:4]))
+                if cause_overlap >= 0.55:
+                    basis.append('overlapping mechanism terms')
+                if not basis:
+                    continue
+                relationship = 'same-project: review manually; not an automatic duplicate'
+                priority = 2 if same_class and shared_paths else 1
+            elif same_class and shared_paths:
+                basis = ['same bug class', 'same path/symbol: ' + ', '.join(shared_paths[:4])]
+                relationship = 'other project: related pattern, not a duplicate'
+                priority = 0
+            else:
+                continue
+            matches.append({
+                'finding_id': finding.get('id'), 'case_id': prior['case_id'],
+                'prior_finding_id': prior.get('finding_id'), 'project_key': prior['project_key'],
+                'program': prior.get('program', ''), 'disposition': prior['disposition'],
+                'bug_class': prior['bug_class'], 'affected_paths': prior['affected_paths'],
+                'root_cause_summary': prior['root_cause_summary'], 'basis': basis,
+                'relationship': relationship, 'review_priority': priority,
+            })
+    matches.sort(key=lambda row: (-row['review_priority'], row['finding_id'], row['case_id']))
+    result = {
+        'project_key': project_key, 'history_path': str(path), 'history_records': len(old),
+        'prior_cases_total': len(prior_cases), 'prior_cases_returned': len(prior_case_summaries),
+        'prior_cases': prior_case_summaries,
+        'checked_at': datetime.now(timezone.utc).isoformat(),
+        'run_id': meta.get('run_id'), 'findings_sha256': _history_input_digest(records),
+        'matches': matches, 'candidate_matches': len({row['finding_id'] for row in matches}),
+        'state': 'review-required' if matches else 'no-history-match-found',
+        'notice': 'prior_cases are your own compact same-project history and can seed the hunt. '
+        'Candidate matches are recall-oriented leads, not duplicate verdicts; compare '
+                  'root cause, path, revision and program outcome. No match cannot reveal another '
+                  'researcher\'s private submissions.',
+    }
+    if meta.get('history_project_key') != project_key:
+        meta['history_project_key'] = project_key
+        dump(run / 'run.json', meta)
+    dump(run / 'history-matches.json', result)
+    return result
+
+
+def history_summary(ledger=None):
+    path = _history_path(ledger)
+    rows = _latest_history(_history_rows(path))
+    counts = {status: sum(row['disposition'] == status for row in rows)
+              for status in sorted(HISTORY_DISPOSITIONS)}
+    closed = {'accepted', 'paid', 'duplicate', 'invalid', 'out-of-scope', 'rejected', 'withdrawn'}
+    decided = sum(row['disposition'] in closed for row in rows)
+    by_class, by_lens, duplicate_reasons = {}, {}, {}
+    for row in rows:
+        bug_class = row.get('bug_class', 'unknown')
+        lens = row.get('lens', 'unattributed')
+        by_class.setdefault(bug_class, {})[row['disposition']] = (
+            by_class.setdefault(bug_class, {}).get(row['disposition'], 0) + 1)
+        by_lens.setdefault(lens, {})[row['disposition']] = (
+            by_lens.setdefault(lens, {}).get(row['disposition'], 0) + 1)
+        if row['disposition'] == 'duplicate':
+            reason = row.get('reason', 'unspecified')
+            duplicate_reasons[reason] = duplicate_reasons.get(reason, 0) + 1
+    return {
+        'history': str(path), 'reports': len(rows), 'dispositions': counts,
+        'duplicate_of_decided': f"{counts['duplicate']} of {decided}" if decided else '0 of 0',
+        'duplicate_reasons': duplicate_reasons, 'by_bug_class': by_class, 'by_lens': by_lens,
+        'notice': 'Descriptive counts from your own recorded reports; not a forecast of future '
+                  'acceptance, duplicates or payout.',
+    }
+
+
+def lead_queue(run):
+    run = Path(run).resolve()
+    errors = validate(run)
+    records = read_json(run / 'findings.json')
+    if errors:
+        return {'state': 'invalid', 'errors': errors, 'leads': []}
+    leads = []
+    for row in records:
+        if row['status'] not in ('hypothesis', 'needs-evidence'):
+            continue
+        leads.append({
+            'id': row['id'], 'status': row['status'], 'severity': row['severity'],
+            'bug_class': row['bug_class'], 'root_cause': row['root_cause'],
+            'next_experiment': row['next_experiment'],
+        })
+    leads.sort(key=lambda row: (0 if row['status'] == 'needs-evidence' else 1,
+                                row['id']))
+    return {'state': 'open-leads' if leads else 'all-leads-closed',
+            'open_count': len(leads), 'leads': leads,
+            'notice': 'Every open lead needs a decisive next experiment. A listed experiment is '
+                      'not evidence that it was run.'}
 
 
 # --------------------------------------------------------------------------- #
@@ -182,6 +612,30 @@ def _check_record(row, prefix, run, seen, errors):
     paths = row['affected_paths']
     if not isinstance(paths, list) or not paths or not all(has_text(p) for p in paths):
         errors.append(prefix + ': affected_paths must be a nonempty string array')
+    if row['status'] in ('hypothesis', 'needs-evidence'):
+        next_step = row.get('next_experiment')
+        if not isinstance(next_step, dict):
+            errors.append(prefix + ': open candidate requires next_experiment object')
+        else:
+            for key in ('question', 'method', 'expected_evidence'):
+                if not has_text(next_step.get(key)):
+                    errors.append(prefix + ': open candidate requires next_experiment.' + key)
+            if 'blocker' in next_step and not isinstance(next_step['blocker'], str):
+                errors.append(prefix + ': next_experiment.blocker must be a string')
+    history_review = row.get('history_review')
+    if history_review is not None:
+        if not isinstance(history_review, dict):
+            errors.append(prefix + ': history_review must be an object')
+        else:
+            if history_review.get('status') not in HISTORY_REVIEW_STATUSES:
+                errors.append(prefix + ': invalid history_review.status')
+            case_ids = history_review.get('case_ids', [])
+            if not isinstance(case_ids, list) or not all(has_text(x) for x in case_ids):
+                errors.append(prefix + ': history_review.case_ids must be a string array')
+            if not isinstance(history_review.get('rationale', ''), str):
+                errors.append(prefix + ': history_review.rationale must be a string')
+            if not isinstance(history_review.get('evidence', ''), str):
+                errors.append(prefix + ': history_review.evidence must be a string')
     for key, allowed in (('status', STATUSES), ('severity', SEVERITIES),
                          ('scope_status', SCOPE_STATUSES),
                          ('deployment_status', DEPLOY_STATUSES)):
@@ -250,7 +704,7 @@ def _check_record(row, prefix, run, seen, errors):
     return True
 
 
-def _check_submission(row, prefix, run, errors):
+def _check_submission(row, prefix, run, errors, history_match_ids=None):
     """Gates that encode why bounty reports actually get rejected."""
     if row['status'] != 'verified':
         errors.append(prefix + ': submission requires status verified, not ' + row['status'])
@@ -272,6 +726,39 @@ def _check_submission(row, prefix, run, errors):
     if not has_text(row['evidence'].get('impact_quantification')):
         errors.append(prefix + ': submission requires evidence.impact_quantification '
                       '(what moves, how much, at what attacker cost)')
+    history = row.get('history_review')
+    if not isinstance(history, dict):
+        errors.append(prefix + ': submission requires a personal history review')
+    else:
+        status = history.get('status')
+        case_ids = history.get('case_ids', [])
+        rationale = history.get('rationale', '')
+        if status == 'unchecked':
+            errors.append(prefix + ': personal history was not checked; run history check')
+        elif status == 'same-mechanism':
+            errors.append(prefix + ': personal history marks the same mechanism; do not submit')
+        elif status == 'unavailable':
+            errors.append(prefix + ': personal history is unavailable; resolve the history check')
+        elif status == 'no-match':
+            if case_ids:
+                errors.append(prefix + ': no-match cannot list prior case_ids')
+            if not has_text(rationale):
+                errors.append(prefix + ': no-match requires the history check result/date')
+            if history_match_ids and history_match_ids.get(row['id']):
+                errors.append(prefix + ': personal history has matching cases; review them before submission')
+        elif status in ('different-root-cause', 'regression'):
+            if not case_ids:
+                errors.append(prefix + ': reviewed history match requires case_ids')
+            if not has_text(rationale):
+                errors.append(prefix + ': reviewed history match requires a mechanism comparison')
+            if (history_match_ids is not None and isinstance(case_ids, list) and
+                    all(isinstance(case_id, str) for case_id in case_ids)):
+                detected = set(history_match_ids.get(row['id'], set()))
+                reviewed = set(case_ids)
+                if detected != reviewed:
+                    errors.append(prefix + ': history case_ids must cover every match from history check')
+            if status == 'regression' and not has_text(history.get('evidence')):
+                errors.append(prefix + ': regression requires evidence that the issue was reintroduced in the current deployment')
     if not (run / 'dup-map.json').is_file():
         errors.append(prefix + ': submission requires a built dup-map.json in the run')
     objections = row['objections'] if isinstance(row['objections'], list) else []
@@ -285,6 +772,37 @@ def _check_submission(row, prefix, run, errors):
                       + '; answer them with an anchor or mark the finding refuted')
 
 
+def _submission_history_matches(run, meta, records, errors):
+    """Require a fresh history comparison and return its detected case ids by finding."""
+    path = run / 'history-matches.json'
+    if not path.is_file():
+        errors.append('history-matches.json: run history check before submission')
+        return None
+    try:
+        data = read_json(path)
+    except (OSError, json.JSONDecodeError):
+        errors.append('history-matches.json: must be valid JSON from history check')
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get('matches'), list):
+        errors.append('history-matches.json: invalid history check result')
+        return None
+    if data.get('run_id') != meta.get('run_id'):
+        errors.append('history-matches.json: belongs to a different run; rerun history check')
+    expected_project = meta.get('history_project_key') or meta.get('project_key')
+    if data.get('project_key') != expected_project:
+        errors.append('history-matches.json: project key changed; rerun history check')
+    if data.get('findings_sha256') != _history_input_digest(records):
+        errors.append('history-matches.json: candidate mechanisms changed; rerun history check')
+    by_finding = {}
+    for i, match in enumerate(data['matches']):
+        if (not isinstance(match, dict) or not has_text(match.get('finding_id')) or
+                not has_text(match.get('case_id'))):
+            errors.append(f'history-matches.json: matches[{i}] is missing finding_id or case_id')
+            continue
+        by_finding.setdefault(match['finding_id'], set()).add(match['case_id'])
+    return by_finding
+
+
 def validate(run, submission=False):
     run = Path(run).resolve()
     errors = []
@@ -296,10 +814,13 @@ def validate(run, submission=False):
             errors.append(f'run.json: schema_version {found!r} is not {SCHEMA_VERSION}; '
                           'start a new run directory with this version of the helper')
     else:
+        meta = {}
         errors.append('run.json: missing; this directory was not created by init')
     records = read_json(run / 'findings.json')
     if not isinstance(records, list):
         return errors + ['findings.json must be an array']
+    history_matches = (_submission_history_matches(run, meta, records, errors)
+                       if submission else None)
     seen = set()
     for i, row in enumerate(records):
         prefix = f'finding[{i}]'
@@ -308,7 +829,7 @@ def validate(run, submission=False):
             continue
         complete = _check_record(row, prefix, run, seen, errors)
         if complete and submission:
-            _check_submission(row, prefix, run, errors)
+            _check_submission(row, prefix, run, errors, history_matches)
     if submission and not records:
         errors.append('findings.json: no records to submit')
     return errors
@@ -1824,6 +2345,42 @@ def build_parser():
     dup = sub.add_parser('dup-check', help='match findings against the built duplicate map')
     dup.add_argument('--run', required=True)
 
+    queue = sub.add_parser('queue', help='show every open lead and its required next experiment')
+    queue.add_argument('--run', required=True)
+
+    hist = sub.add_parser('history', help='record and compare private bounty-report outcomes')
+    hist_sub = hist.add_subparsers(dest='history_action', required=True)
+    hist_check = hist_sub.add_parser('check', help='compare this run with your private report history')
+    hist_check.add_argument('--run', required=True)
+    hist_check.add_argument('--ledger', default=None, help='private JSONL path; default ~/.bounty-pilot/history.jsonl')
+    hist_check.add_argument('--project', default=None, help='override project key when the repo has no origin remote')
+    hist_record = hist_sub.add_parser('record', help='record a submitted report or a program decision')
+    hist_record.add_argument('--run', required=True)
+    hist_record.add_argument('--finding', required=True)
+    hist_record.add_argument('--outcome', required=True, choices=sorted(HISTORY_DISPOSITIONS))
+    hist_record.add_argument('--ledger', default=None)
+    hist_record.add_argument('--project', default=None)
+    hist_record.add_argument('--program', default='')
+    hist_record.add_argument('--case-id', default=None, help='reuse the id printed by the first record')
+    hist_record.add_argument('--reason', default='unspecified', choices=sorted(HISTORY_REASONS))
+    hist_record.add_argument('--hours', type=float, default=None, help='total hours spent on this report')
+    hist_import = hist_sub.add_parser('import', help='seed the private history from an older report')
+    hist_import.add_argument('--project', required=True, help='repository URL or host/owner/repo key')
+    hist_import.add_argument('--finding-id', required=True, help='your report identifier or local label')
+    hist_import.add_argument('--bug-class', required=True)
+    hist_import.add_argument('--surface', action='append', required=True,
+                             help='affected path or path:function; repeatable')
+    hist_import.add_argument('--root-cause', required=True, help='short mechanism summary, max 500 chars')
+    hist_import.add_argument('--outcome', required=True, choices=sorted(HISTORY_DISPOSITIONS))
+    hist_import.add_argument('--ledger', default=None)
+    hist_import.add_argument('--program', default='')
+    hist_import.add_argument('--case-id', default=None)
+    hist_import.add_argument('--reason', default='unspecified', choices=sorted(HISTORY_REASONS))
+    hist_import.add_argument('--hours', type=float, default=None)
+    hist_import.add_argument('--lens', default='unattributed')
+    hist_summary = hist_sub.add_parser('summary', help='summarise your own recorded report outcomes')
+    hist_summary.add_argument('--ledger', default=None)
+
     dlt = sub.add_parser('delta', help='rank non-test source changed since an audited revision')
     dlt.add_argument('--repo', required=True)
     dlt.add_argument('--since', required=True, help='exact commit the last audit covered')
@@ -1913,6 +2470,25 @@ def main(argv=None):
                                         'public. Compare mechanisms before dropping or filing.'},
                              indent=2))
             return 1 if errors or collisions else 0
+        if args.action == 'queue':
+            result = lead_queue(args.run)
+            print(json.dumps(result, indent=2))
+            return 1 if result['state'] == 'invalid' else 0
+        if args.action == 'history':
+            if args.history_action == 'check':
+                result = history_check(args.run, args.ledger, args.project)
+            elif args.history_action == 'record':
+                result = history_record(args.run, args.finding, args.outcome, args.ledger,
+                                        args.project, args.program, args.case_id, args.reason,
+                                        args.hours)
+            elif args.history_action == 'import':
+                result = history_import(args.project, args.finding_id, args.bug_class,
+                                        args.surface, args.root_cause, args.outcome, args.ledger,
+                                        args.program, args.case_id, args.reason, args.hours, args.lens)
+            else:
+                result = history_summary(args.ledger)
+            print(json.dumps(result, indent=2))
+            return 0
         if args.action == 'delta':
             print(json.dumps(delta(args.repo, args.since, args.scope, args.limit), indent=2))
             return 0

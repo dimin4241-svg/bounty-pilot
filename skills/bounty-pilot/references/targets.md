@@ -71,7 +71,18 @@ it held.
 
 ## Keep the outcome
 
-When a hunt ends, append one line to your own ledger outside this repository: target, class of
-target, hours spent, and outcome (paid, duplicate, out-of-scope, invalid, no finding). After ten
-targets that ledger is the most valuable file you own, because it tells you which of the signals
-above actually pays for *your* reading style.
+For each submitted report, record its disposition in the private history after submission and again
+when the program decides it:
+
+```sh
+python3 <skill-dir>/scripts/bounty.py history record --run <run> --finding BP-001 \
+    --outcome submitted --program "Cantina / Example" --hours 4
+python3 <skill-dir>/scripts/bounty.py history record --run <run> --finding BP-001 \
+    --outcome paid --case-id <id-printed-by-first-command>
+python3 <skill-dir>/scripts/bounty.py history summary
+```
+
+Use `history import` to seed previous reports from concise, verified metadata. Keep target-level
+effort for hunts with no submissions in a separate private note. Compare counts by target shape,
+bug class, lens and disposition; they describe your recorded sample and do not forecast future
+acceptance or payment.
