@@ -165,7 +165,7 @@ python3 skills/bounty-pilot/scripts/bounty.py bundle \
 | --- | --- |
 | [SKILL.md](skills/bounty-pilot/SKILL.md) | Главная инструкция агенту |
 | [targets.md](skills/bounty-pilot/references/targets.md) | Когда цель стоит недели, и файл фактов о программе |
-| [hunt-agents/](skills/bounty-pilot/references/hunt-agents) | Восемь прицельных линз, их общая стойка и формат вывода |
+| [hunt-agents/](skills/bounty-pilot/references/hunt-agents) | Тринадцать прицельных линз, их общая стойка и формат вывода |
 | [passes.md](skills/bounty-pilot/references/passes.md) | Цель каждого прохода, диспетчеризация, пол из гипотез, правила остановки |
 | [sop.md](skills/bounty-pilot/references/sop.md) | Как читать код: пересказ, держатель обязательства, обратное чтение, эскалация |
 | [adjudicate.md](skills/bounty-pilot/references/adjudicate.md) | Двухраундовый обмен, пять гейтов, исходы и повышения |
