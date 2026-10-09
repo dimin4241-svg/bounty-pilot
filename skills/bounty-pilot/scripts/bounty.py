@@ -21,7 +21,30 @@ SCHEMA_VERSION = 2
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 
 SOURCE_SUFFIXES = {'.sol', '.vy', '.yul', '.huff', '.rs', '.move', '.cairo', '.fe',
-                   '.go', '.ts', '.tsx', '.js', '.py', '.c', '.h', '.cpp'}
+                   '.fc', '.func', '.tolk', '.go', '.ts', '.tsx', '.js', '.py', '.c', '.h',
+                   '.cpp', '.java', '.kt', '.kts', '.php', '.rb', '.swift', '.cs', '.scala',
+                   '.ex', '.exs', '.dart', '.tf', '.hcl', '.sql', '.sh', '.bash', '.lua',
+                   '.graphql', '.graphqls', '.gql', '.proto'}
+CONFIG_SUFFIXES = {'.json', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.xml',
+                   '.graphql', '.graphqls', '.gql', '.proto', '.idl'}
+CONFIG_ROOT_FILES = {
+    'foundry.toml', 'hardhat.config.js', 'hardhat.config.ts', 'hardhat.config.cjs',
+    'truffle-config.js', 'anchor.toml', 'move.toml', 'scarb.toml', 'cargo.toml',
+    'package.json', 'go.mod', 'pyproject.toml', 'setup.cfg', 'remappings.txt',
+    'rust-toolchain', 'rust-toolchain.toml', 'docker-compose.yml', 'compose.yml',
+    'dockerfile', 'makefile', 'justfile',
+}
+CONFIG_DIRS = {'config', 'configs', 'deployment', 'deployments', 'idl', 'abi',
+               'migrations', 'workflows'}
+CONFIG_BUNDLE_MAX_FILE_BYTES = 200_000
+CONFIG_BUNDLE_MAX_TOTAL_BYTES = 800_000
+SENSITIVE_PATH_PARTS = {'.env', 'secrets', 'credentials', 'keystore', 'wallet', 'mnemonic'}
+SECRET_KEY_VALUE = re.compile(
+    r'(?i)(\b(?:private[_-]?key|api[_-]?key|secret(?:[_-]?key)?|access[_-]?token|'
+    r'bearer[_-]?token|password|mnemonic)\b\s*[:=]\s*)(["\'])(.*?)(\2)')
+UNQUOTED_SECRET_KEY_VALUE = re.compile(
+    r'(?i)(\b(?:private[_-]?key|api[_-]?key|secret(?:[_-]?key)?|access[_-]?token|'
+    r'bearer[_-]?token|password|mnemonic)\b\s*[:=]\s*)(?!["\'])([^,\s}\]]+)')
 STATUSES = {'hypothesis', 'needs-evidence', 'verified', 'refuted'}
 SEVERITIES = {'unassessed', 'informational', 'low', 'medium', 'high', 'critical'}
 SCOPE_STATUSES = {'unknown', 'in-scope', 'out-of-scope'}
@@ -83,7 +106,9 @@ def template():
                 attacker_capabilities='', preconditions='', impact='',
                 scope_status='unknown', deployment_status='unknown',
                 novelty={'status': 'not-checked', 'sources': []},
-                evidence={}, objections=[], rejection_reason='')
+                evidence={}, next_experiment={'question': '', 'method': '', 'expected_evidence': '',
+                                              'blocker': ''},
+                objections=[], rejection_reason='')
 
 
 def initialize(repo, out):
@@ -595,6 +620,66 @@ def _collect(root, paths):
     return '\n'.join(parts), skipped
 
 
+def _redact_context_secrets(text):
+    text = SECRET_KEY_VALUE.sub(lambda m: m.group(1) + m.group(2) + '<redacted>' + m.group(4), text)
+    return UNQUOTED_SECRET_KEY_VALUE.sub(r'\1<redacted>', text)
+
+
+def _collect_project_context(root, paths):
+    parts, skipped = [], []
+    for path in paths:
+        try:
+            body = (root / path).read_text(encoding='utf-8')
+        except (OSError, UnicodeDecodeError):
+            skipped.append(path)
+            continue
+        parts.append(_fenced(path, _redact_context_secrets(body)))
+    return '\n'.join(parts), skipped
+
+
+def _is_sensitive_context_path(path):
+    parts = [part.lower() for part in Path(path).parts]
+    name = parts[-1] if parts else ''
+    return (any(part in SENSITIVE_PATH_PARTS for part in parts)
+            or any(marker in name for marker in ('secret', 'credential', 'keystore', 'mnemonic'))
+            or name.startswith('.env')
+            or Path(name).suffix.lower() in {'.pem', '.key', '.p12', '.pfx', '.keystore'})
+
+
+def _is_project_context_path(path):
+    """Select behavior-defining metadata without sweeping arbitrary data files."""
+    p = Path(path)
+    parts = [part.lower() for part in p.parts]
+    name = p.name.lower()
+    if _is_test_path(path) or _is_sensitive_context_path(path):
+        return False
+    if name in CONFIG_ROOT_FILES or name.startswith('rust-toolchain'):
+        return True
+    if p.suffix.lower() not in CONFIG_SUFFIXES:
+        return False
+    return any(part in CONFIG_DIRS for part in parts[:-1]) or name in {
+        'package.json', 'cargo.toml', 'move.toml', 'scarb.toml', 'foundry.toml',
+        'anchor.toml', 'go.mod', 'pyproject.toml'}
+
+
+def _collect_context_files(root, tracked):
+    selected, omitted, used = [], [], 0
+    for path in tracked:
+        if not _is_project_context_path(path):
+            continue
+        try:
+            size = (root / path).stat().st_size
+        except OSError:
+            omitted.append(path)
+            continue
+        if size > CONFIG_BUNDLE_MAX_FILE_BYTES or used + size > CONFIG_BUNDLE_MAX_TOTAL_BYTES:
+            omitted.append(path)
+            continue
+        selected.append(path)
+        used += size
+    return selected, omitted
+
+
 def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
     """Assemble one deterministic bundle per lens. This is the dispatch mechanic:
     a pass that did not run this command did not bundle its source."""
@@ -631,6 +716,7 @@ def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
                 and (not scope_prefixes or any(p.startswith(s) for s in scope_prefixes))]
     all_tests = [p for p in tracked if Path(p).suffix in SOURCE_SUFFIXES and _is_test_path(p)]
     test_paths, tests_omitted = _relevant_tests(root, all_tests, in_scope, scope_prefixes)
+    config_paths, config_omitted = _collect_context_files(root, tracked)
 
     out = run / 'bundles'
     out.mkdir(parents=True, exist_ok=True)
@@ -645,6 +731,14 @@ def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
                     'trail leads there.\n' if tests_omitted else '')
                  + '\n' + tests)
     (out / 'tests.md').write_text(tests_doc, encoding='utf-8')
+    configs, config_skipped = _collect_project_context(root, config_paths)
+    config_doc = ('# Project configuration and deployment artifacts\n\n'
+                  'These files can define compiler versions, deployment addresses, account '
+                  'layouts, feature flags and runtime wiring. Treat them as context; confirm '
+                  'which configuration is actually deployed.\n\n'
+                  + (f'{len(config_omitted)} candidate file(s) omitted by path/size budget; '
+                     'read them from the checkout if a trail leads there.\n\n'
+                     if config_omitted else '') + configs)
 
     context = []
     for name in ('scope.md', 'dup-map.json', 'known-hypotheses.md'):
@@ -691,6 +785,8 @@ def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
                 pieces.append(findings_doc)
             if context_doc:
                 pieces.append(context_doc)
+            if config_doc:
+                pieces.append(config_doc)
             pieces.append(source_doc)
             pieces.append(TRIAGE_FOOTER.format(target=root.name, commit=commit))
             path = out / 'triage-bundle.md'
@@ -714,6 +810,8 @@ def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
                                                'The earlier passes produced these. Cross them.'))
         if context_doc:
             pieces.append(context_doc)
+        if config_doc:
+            pieces.append(config_doc)
         pieces.append(source_doc)
         if lens == 'coverage-gap':
             pieces.append(tests_doc)
@@ -732,9 +830,14 @@ def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
         notes.append(f'{len(skipped)} file(s) unreadable and omitted: ' + ', '.join(skipped[:5]))
     if not in_scope:
         notes.append('no in-scope source matched; check --scope and the tracked file list')
+    if config_skipped:
+        notes.append(f'{len(config_skipped)} configuration file(s) unreadable and omitted: '
+                     + ', '.join(config_skipped[:5]))
     return {'target': str(root), 'commit': commit, 'run': str(run),
             'in_scope_files': len(in_scope), 'test_files_bundled_for_coverage_gap': len(test_paths),
             'test_files_omitted': len(tests_omitted),
+            'config_files_bundled': len(config_paths) - len(config_skipped),
+            'config_files_omitted': len(config_omitted),
             'context_sections': len(context), 'bundles': written, 'notes': notes,
             'dispatch': 'Give each bundle to its own agent, in its own context. Record in '
                         'coverage.md which lenses actually ran.'}
@@ -902,6 +1005,22 @@ def proxy_slots():
     }
 
 
+def minimal_clone_implementation(code_hex):
+    """Return the implementation address for the canonical EIP-1167 runtime, if present."""
+    raw = bytes.fromhex(code_hex[2:] if code_hex.startswith('0x') else code_hex)
+    prefix = bytes.fromhex('363d3d373d3d3d363d73')
+    suffix = bytes.fromhex('5af43d82803e903d91602b57fd5bf3')
+    if (len(raw) != len(prefix) + 20 + len(suffix)
+            or not raw.startswith(prefix) or not raw.endswith(suffix)):
+        return None
+    return '0x' + raw[len(prefix):-len(suffix)].hex()
+
+
+def looks_like_minimal_clone(code_hex):
+    raw = bytes.fromhex(code_hex[2:] if code_hex.startswith('0x') else code_hex)
+    return raw.startswith(bytes.fromhex('363d3d373d3d3d363d73'))
+
+
 # solc appends a CBOR map then its own 2-byte big-endian length. The map starts with a
 # CBOR major-type-5 header (0xa1..0xaf for 1..15 pairs) and names its hash algorithm.
 METADATA_MARKERS = (b'solc', b'ipfs', b'bzzr0', b'bzzr1')
@@ -985,15 +1104,45 @@ def verify_deployment(rpc, address, artifact=None, block='latest', opener=None):
         result['reason'] = ('no code at this address on this chain at this block - '
                             'an EOA, a wrong chain, or not deployed yet')
         return result
-    for label, slot in proxy_slots().items():
+    slots = proxy_slots()
+    for label, slot in slots.items():
         word = rpc_call(rpc, 'eth_getStorageAt', [address, slot, pinned], opener) or '0x'
         packed = word[-40:] if len(word) >= 42 else ''
         if packed and int(packed, 16) != 0:
             result['proxy'][label] = '0x' + packed
+    clone_implementation = minimal_clone_implementation(code)
+    if clone_implementation:
+        result['proxy']['eip1167-minimal-clone'] = clone_implementation
+    elif looks_like_minimal_clone(code):
+        result['proxy']['eip1167-pattern'] = 'detected-but-unresolved'
     if result['proxy']:
         result['note'] = ('this address is a proxy; verify the implementation address too, '
                           'and record which implementation was live at this block')
-    implementation = result['proxy'].get('eip1967-implementation')
+    implementation = (result['proxy'].get('eip1967-implementation')
+                      or result['proxy'].get('eip1822-proxiable')
+                      or clone_implementation)
+    beacon = result['proxy'].get('eip1967-beacon')
+    resolution_errors = []
+    if beacon:
+        try:
+            raw_impl = rpc_call(rpc, 'eth_call',
+                                [{'to': beacon, 'data': load_keccak().selector('implementation()')},
+                                 pinned], opener)
+            if not isinstance(raw_impl, str) or not re.fullmatch(r'0x[0-9a-fA-F]{64,}', raw_impl):
+                raise ValueError('beacon implementation() returned malformed data')
+            beacon_implementation = '0x' + raw_impl[-40:]
+            if int(beacon_implementation, 16) == 0:
+                raise ValueError('beacon implementation() returned the zero address')
+            if implementation and implementation.lower() != beacon_implementation.lower():
+                resolution_errors.append('EIP-1967 implementation and beacon resolve to different addresses')
+            implementation = beacon_implementation
+            result['proxy']['beacon-implementation'] = beacon_implementation
+        except (OSError, ValueError, urllib.error.URLError) as exc:
+            resolution_errors.append(f'could not resolve EIP-1967 beacon implementation: {exc}')
+    result['proxy_resolution'] = ('resolved' if implementation and not resolution_errors
+                                  else ('unresolved' if result['proxy'] else 'not-a-proxy'))
+    if resolution_errors:
+        result['proxy_resolution_errors'] = resolution_errors
     if implementation:
         impl_code = rpc_call(rpc, 'eth_getCode', [implementation, pinned], opener) or '0x'
         result['proxy_implementation'] = {
@@ -1004,7 +1153,7 @@ def verify_deployment(rpc, address, artifact=None, block='latest', opener=None):
     if artifact:
         artifact_code, source_key = read_artifact(artifact)
         result['artifact'] = {'path': str(artifact), 'field': source_key}
-        if implementation:
+        if implementation and not resolution_errors:
             # The logic lives in the implementation, so that is what an artifact must match.
             # A proxy whose own runtime matches proves nothing about the code that runs.
             impl_comparison = compare_bytecode(impl_code, artifact_code)
@@ -1027,6 +1176,13 @@ def verify_deployment(rpc, address, artifact=None, block='latest', opener=None):
             result['compared'] = 'address runtime'
             result['comparison'] = comparison
             result['deployment_status'] = comparison['status']
+            if result['proxy']:
+                result['deployment_status'] = 'partial'
+                result['comparison'] = {
+                    'status': 'partial',
+                    'reason': ('proxy was detected but its executing implementation could not be '
+                               'resolved and compared: ' + '; '.join(resolution_errors or
+                               ['this proxy pattern is not supported yet']))}
         if result['proxy'] and result['deployment_status'] == 'exact':
             result['note'] = ('implementation bytecode matches at this block. A proxy can be '
                               'repointed, so record this block in the finding and recheck before '

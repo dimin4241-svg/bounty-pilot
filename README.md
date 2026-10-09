@@ -20,7 +20,7 @@
 
 ## What is Bounty Pilot?
 
-Bounty Pilot gives a coding agent a repeatable workflow for **Solidity/EVM audits, Rust/Solana review, local proof-of-concept validation, and bug bounty report preparation**. It keeps technical validity, severity, program eligibility, and known-issue checks separate.
+Bounty Pilot gives a coding agent a repeatable workflow for **Web3 bounty research across EVM, Solana and mixed on/off-chain repositories**, including local proof-of-concept validation and private report preparation. It routes Move, Cairo and CosmWasm projects through stack-specific guidance, and labels where a dedicated specialist lens is not yet available. It keeps technical validity, severity, program eligibility, and known-issue checks separate.
 
 It has two halves, and both decide whether a hunt finds anything:
 
@@ -76,13 +76,15 @@ Alternatively, copy `skills/bounty-pilot` into your agent's supported skills dir
 | **Target triage** | Scores a program from churn since the audited revision, files never named in tests and published program economics — and lists its own unknowns instead of rounding up |
 | **Post-audit delta** | Ranks non-test source changed since an exact audited commit, weighted by external calls, value movement, aggregate writes and callback entry points |
 | **Duplicate map first** | Burns surfaces published in known-issue lists, past audits and contest findings *before* the first pass, then matches candidates against them mechanically |
-| **Deployed-code verification** | Compares on-chain runtime bytecode with a local build, resolves EIP-1967/1822 proxy slots, pins one block per run, and separates `exact` from `partial` honestly |
+| **Deployed-code verification** | Compares direct deployments and resolved EIP-1967 implementation/beacon, EIP-1822 and canonical EIP-1167 implementation code at one pinned block; unsupported proxy shapes stay `partial` |
+| **Stack-aware context** | Bundles common build/deployment manifests and bounded config artifacts; routes mixed projects through component and trust-boundary adapters |
 | **Live-constant checks** | Reads a hardcoded index, address, decimal or feed id against live chain state, because a constant is a claim about the outside world |
-| **Eight aimed lenses** | Hunts time, lineage, observability, aggregates, parameter authorization, persistence, live truth and the Solana account model |
+| **Thirteen aimed lenses** | Selects mechanism lenses by protocol shape, including access paths, external calls, accounting, economics, upgrades, liveness and Solana account constraints |
 | **Separated generation and refutation** | Hunt passes state claims at full strength; a later pass attacks each one against five written gates |
 | **Evidence requirements** | A verified finding needs a local PoC, exit code, log, assertion, negative control and a source-integrity explanation |
 | **Submission gate** | Refuses what programs actually reject: undeployed revision, unestablished scope, unassessed severity, no rubric citation, thin novelty check, unquantified impact |
 | **Resumable findings** | Preserves hypotheses and rejection reasons; reopens a candidate when the protection that refuted it is edited |
+| **Blind backtests** | Measures rediscovery on pinned, published cases without exposing truth before sealing; live duplicate and reward outcomes stay in a separate private ledger |
 | **Private report drafts** | Produces English submission drafts without automatically sending or publishing them |
 
 ## How it works

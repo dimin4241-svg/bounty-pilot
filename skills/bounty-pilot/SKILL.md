@@ -1,6 +1,6 @@
 ---
 name: bounty-pilot
-description: Run an evidence-driven Web3 bug bounty hunt from a repository URL or local checkout. Use for Bounty Pilot, bounty hunting, choosing a bounty target, Solidity/EVM security review, Rust/Solana review, audit loop or loop mode, post-audit delta review, validating or refuting a finding, adversarial triage of a candidate, checking whether deployed bytecode matches the source, duplicate and known-issue checks, severity and impact-class placement, and preparing a private bounty report. Coordinates target triage, scope and duplicate mapping, bundled parallel lens passes, a two-round objection exchange, reproducible local PoCs and submission gating.
+description: Run an evidence-driven Web3 bug bounty hunt from a repository URL or local checkout, including mixed on-chain and off-chain projects. Use for target selection, Solidity/EVM, Rust/Solana, Move, Cairo, CosmWasm or other Web3 security review; audit loops; delta review; candidate validation; duplicate and deployment checks; and private bounty reports. Routes by stack, preserves unresolved leads with concrete next experiments, and distinguishes supported lenses from uncovered areas.
 ---
 # Bounty Pilot
 
@@ -75,6 +75,10 @@ no live testing beyond read-only reads the environment already permits.
 
 ## Stage 2 — Model and delta
 
+Read `references/adapters.md` and route each component by its actual stack and runtime. For mixed
+projects, map contracts, relayers, keepers, APIs, signers and recovery jobs as one trust graph. If a
+stack has no dedicated lens, say so in `coverage.md` and do not translate EVM assumptions to it.
+
 Write `model.md`: state transitions, external assumptions, operational dependencies, and invariants
 with the source or specification that evidences each. Label inferred invariants as inferred. Keep
 build failures and incomplete history visible rather than tidy.
@@ -89,8 +93,9 @@ is safe because it is excluded.
 ## Stage 3 — Hunt
 
 Read `references/passes.md` first; it settles the aiming, the dispatch mechanics and the stop rules.
-Recall is driven by the number of **independent** adversarial readings, so the bundles and the
-separate contexts are not ceremony.
+Independent readings can improve recall, but repeated agents can also repeat one another and consume
+the budget. Record their unique coverage and candidates; use held-out backtests to decide whether
+doubling a lens is worth its added cost.
 
 **Choose the lenses.** There are thirteen; running all of them on every target wastes the budget.
 `passes.md` has a selection table by protocol shape. Two run on nearly everything:
@@ -120,7 +125,10 @@ Pass 2 repeats the mechanism lenses with `known-hypotheses.md` now in the bundle
 its own earlier output, and adds `--lens seam` over both passes' records — including the demoted and
 refuted ones, whose refusals the seam lens is told to reconstruct.
 
-Hunt agents never refute themselves; that is stage 4, and it needs the claim at full strength. After
+Every `CANDIDATE` and `LEAD` must include `next_experiment.question`, `method`, and
+`expected_evidence`; include `blocker` when it cannot be run yet. Never close a lead only because a
+tool, account, dependency or network is unavailable. Hunt agents never refute themselves; that is
+stage 4, and it needs the claim at full strength. After
 every pass append the investigated mechanisms to `known-hypotheses.md` — including the ones you
 looked for and did not find — and record in `coverage.md` which lenses actually ran and how many
 readings each got. A lens you could not dispatch is reported, never silently skipped.
@@ -228,3 +236,8 @@ Never read the published findings before sealing — not even the titles. The ha
 whose truth file was populated first, refuses a second seal, and voids a case whose sealed file
 changed. Set `lens` on each finding so rediscoveries can be credited to the lens that produced
 them; the misses, not the hits, are the tuning signal.
+
+For live bounty runs, keep a separate private ledger of effort, reproducible PoCs, duplicate
+outcomes, scope/eligibility decisions, triage outcomes and reward status. These measure the funnel
+that blind rediscovery cannot; they still do not predict future payouts. Never publish target-level
+metrics or findings in this toolkit.

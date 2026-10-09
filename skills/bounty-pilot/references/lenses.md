@@ -51,7 +51,8 @@ resource growth, synchronisation, and `unsafe`. Keep chain and runtime semantics
 
 ## Other languages
 
-Build the model from primary documentation and the project's own tooling, and state plainly that
-this package has no specialised checklist for that stack. Do not carry EVM assumptions into Move,
-CosmWasm, TON, Cairo or a native bridge. Use an ecosystem-specific upstream skill only after
-checking its compatibility, and record which one ran.
+Route from `adapters.md`. Build the model from primary documentation and the project's own tooling,
+and state plainly when this package has no specialised checklist for that stack. Do not carry EVM
+assumptions into Move, CosmWasm, TON, Cairo or a native bridge. Use an ecosystem-specific upstream
+skill only after checking its compatibility, and record which one ran. For a mixed repository, run
+component-specific analysis and a separate cross-boundary pass.

@@ -209,6 +209,102 @@ class EncodingTests(unittest.TestCase):
 
 
 class RpcTests(unittest.TestCase):
+    def test_beacon_proxy_is_compared_to_the_beacon_implementation(self):
+        proxy = '0x' + '22' * 20
+        beacon = '0x' + '44' * 20
+        impl = '0x' + '33' * 20
+        proxy_code, impl_code = '0x' + '60' * 30, '0x' + '61' * 60
+        beacon_slot = bounty.proxy_slots()['eip1967-beacon']
+        padded = '0x' + '00' * 12 + beacon[2:]
+        node = FakeNode({
+            'eth_chainId': '0x1', 'eth_blockNumber': '0x100',
+            'eth_getCode': lambda params: impl_code if params[0] == impl else proxy_code,
+            'eth_getStorageAt': lambda params: padded if params[1] == beacon_slot else '0x' + '00' * 32,
+            'eth_call': lambda params: '0x' + '00' * 12 + impl[2:],
+        })
+        with tempfile.TemporaryDirectory() as temp:
+            artifact = Path(temp) / 'impl.json'
+            artifact.write_text(json.dumps({'deployedBytecode': {'object': impl_code}}))
+            result = bounty.verify_deployment('http://node.invalid', proxy,
+                                              str(artifact), 'latest', opener=node)
+        self.assertEqual(result['deployment_status'], 'exact')
+        self.assertEqual(result['compared'], 'implementation')
+        self.assertEqual(result['proxy']['beacon-implementation'], impl)
+        self.assertTrue(all(params[-1] == '0x100' for method, params in node.calls
+                            if method in ('eth_getCode', 'eth_getStorageAt', 'eth_call')))
+
+    def test_unresolved_beacon_never_accepts_a_matching_proxy_artifact_as_exact(self):
+        proxy = '0x' + '22' * 20
+        beacon = '0x' + '44' * 20
+        proxy_code = '0x' + '60' * 30
+        beacon_slot = bounty.proxy_slots()['eip1967-beacon']
+        padded = '0x' + '00' * 12 + beacon[2:]
+        def fail_call(_params):
+            raise ValueError('beacon call failed')
+        node = FakeNode({
+            'eth_chainId': '0x1', 'eth_blockNumber': '0x100',
+            'eth_getCode': proxy_code,
+            'eth_getStorageAt': lambda params: padded if params[1] == beacon_slot else '0x' + '00' * 32,
+            'eth_call': fail_call,
+        })
+        with tempfile.TemporaryDirectory() as temp:
+            artifact = Path(temp) / 'proxy.json'
+            artifact.write_text(json.dumps({'deployedBytecode': {'object': proxy_code}}))
+            result = bounty.verify_deployment('http://node.invalid', proxy,
+                                              str(artifact), 'latest', opener=node)
+        self.assertEqual(result['deployment_status'], 'partial')
+        self.assertEqual(result['proxy_resolution'], 'unresolved')
+
+    def test_eip1167_clone_is_compared_to_its_implementation(self):
+        proxy, impl = '0x' + '22' * 20, '0x' + '33' * 20
+        clone_code = '0x363d3d373d3d3d363d73' + impl[2:] + '5af43d82803e903d91602b57fd5bf3'
+        impl_code = '0x' + '61' * 60
+        node = FakeNode({
+            'eth_chainId': '0x1', 'eth_blockNumber': '0x100',
+            'eth_getCode': lambda params: impl_code if params[0] == impl else clone_code,
+            'eth_getStorageAt': '0x' + '00' * 32,
+        })
+        with tempfile.TemporaryDirectory() as temp:
+            artifact = Path(temp) / 'impl.json'
+            artifact.write_text(json.dumps({'deployedBytecode': {'object': impl_code}}))
+            result = bounty.verify_deployment('http://node.invalid', proxy,
+                                              str(artifact), 'latest', opener=node)
+        self.assertEqual(result['deployment_status'], 'exact')
+        self.assertEqual(result['proxy']['eip1167-minimal-clone'], impl)
+
+    def test_eip1822_proxy_is_compared_to_its_proxiable_slot_implementation(self):
+        proxy, impl = '0x' + '22' * 20, '0x' + '33' * 20
+        impl_code = '0x' + '61' * 60
+        slot = bounty.proxy_slots()['eip1822-proxiable']
+        padded = '0x' + '00' * 12 + impl[2:]
+        node = FakeNode({
+            'eth_chainId': '0x1', 'eth_blockNumber': '0x100',
+            'eth_getCode': lambda params: impl_code if params[0] == impl else '0x' + '60' * 30,
+            'eth_getStorageAt': lambda params: padded if params[1] == slot else '0x' + '00' * 32,
+        })
+        with tempfile.TemporaryDirectory() as temp:
+            artifact = Path(temp) / 'impl.json'
+            artifact.write_text(json.dumps({'deployedBytecode': {'object': impl_code}}))
+            result = bounty.verify_deployment('http://node.invalid', proxy,
+                                              str(artifact), 'latest', opener=node)
+        self.assertEqual(result['deployment_status'], 'exact')
+        self.assertEqual(result['proxy_implementation']['address'], impl)
+
+    def test_unrecognized_clone_variant_is_never_exact_against_its_own_runtime(self):
+        proxy = '0x' + '22' * 20
+        code = '0x363d3d373d3d3d363d73' + '33' * 20 + '5af43d82803e903d91602b57fd5bf3' + 'deadbeef'
+        node = FakeNode({
+            'eth_chainId': '0x1', 'eth_blockNumber': '0x100', 'eth_getCode': code,
+            'eth_getStorageAt': '0x' + '00' * 32,
+        })
+        with tempfile.TemporaryDirectory() as temp:
+            artifact = Path(temp) / 'clone.json'
+            artifact.write_text(json.dumps({'deployedBytecode': {'object': code}}))
+            result = bounty.verify_deployment('http://node.invalid', proxy,
+                                              str(artifact), 'latest', opener=node)
+        self.assertEqual(result['deployment_status'], 'partial')
+        self.assertEqual(result['proxy_resolution'], 'unresolved')
+
     def test_verify_deployment_reports_exact_and_pins_one_block(self):
         code = '0x' + ('60' * 40)
         node = FakeNode({'eth_chainId': '0x3e7', 'eth_blockNumber': '0x1e240',
@@ -332,6 +428,10 @@ class RpcTests(unittest.TestCase):
 
 
 class RunTests(unittest.TestCase):
+    def test_inventory_recognizes_more_contract_and_service_languages(self):
+        self.assertTrue({'.fc', '.tolk', '.move', '.cairo', '.rs', '.java', '.kt', '.php',
+                         '.cs', '.tf', '.graphql', '.proto'}.issubset(bounty.SOURCE_SUFFIXES))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -650,6 +750,23 @@ class BundleTests(unittest.TestCase):
         self.assertIn('Shared hunt rules', text)                   # the shared stance
         self.assertIn('plain words', text)                         # the SOP
         self.assertIn('Lens: **accounting**', text)                # restated task footer
+
+    def test_bundles_include_relevant_configs_but_exclude_secret_files(self):
+        (self.repo / 'foundry.toml').write_text(
+            '[profile.default]\nsolc_version = "0.8.24"\napi_key = "do-not-bundle"\n')
+        (self.repo / 'deployments').mkdir()
+        (self.repo / 'deployments/mainnet.json').write_text('{"proxy":"0x1234"}\n')
+        (self.repo / '.env.local').write_text('PRIVATE_KEY=do-not-bundle\n')
+        (self.repo / 'configs').mkdir()
+        (self.repo / 'configs/prod-secrets.yaml').write_text('api_key: do-not-bundle\n')
+        commit(self.repo, 'add config fixtures')
+        result = bounty.bundle(self.repo, self.run, ['accounting'])
+        text = (self.run / 'bundles/accounting-bundle.md').read_text()
+        self.assertIn('solc_version', text)
+        self.assertIn('mainnet.json', text)
+        self.assertNotIn('do-not-bundle', text)
+        self.assertGreaterEqual(result['config_files_bundled'], 2)
+        self.assertIn('<redacted>', text)
 
     def test_groups_expand_and_duplicates_collapse(self):
         result = bounty.bundle(self.repo, self.run, ['attack', 'accounting'])

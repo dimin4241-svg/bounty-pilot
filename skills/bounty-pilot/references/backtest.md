@@ -110,6 +110,34 @@ What the output gives you, and what each number is worth:
 - **It measures this workflow, on this model, on that day.** Re-measure after a model change before
   reusing an old number.
 
+## Measure the live funnel separately
+
+Backtests compare rediscovery and misses, but cannot estimate private duplicates, program
+eligibility, acceptance or payment. Keep a private, target-specific ledger with one row per report:
+effort, whether the PoC reproduced from a clean checkout, public match, scope decision, triage
+status, accepted severity and reward status/date. Attribute discoveries to a lens only when the run
+record supports it. Do not turn a small personal sample into a payout probability, and never put
+target identities, report text, wallet addresses or private outcomes in the public toolkit.
+
+Use the ledger to ask which target shapes produce fewer duplicates, which lenses produce candidates
+that survive reproduction, and where reports are rejected. Change one workflow factor at a time and
+keep the old baseline; otherwise an apparent improvement cannot be attributed to the change.
+
+## Measure the live funnel separately
+
+Backtests can compare rediscovery and misses, but they cannot estimate private duplicates, program
+eligibility, acceptance or payment. Keep a private, target-specific ledger with one row per submitted
+report: time/cost to investigate, whether the PoC reproduced from a clean checkout, public match,
+scope decision, triage status, severity accepted, and reward status/date. Attribute discoveries to a
+lens only when the run record supports it. Do not turn a small personal sample into a payout
+probability, and never put target identities, report text, wallet addresses or private outcomes in
+the public skill repository.
+
+Use the ledger to answer practical tuning questions: which target shapes produce fewer duplicates,
+which lens produces candidates that survive reproduction, and where reports are most often rejected.
+Change one workflow factor at a time and keep the old baseline; otherwise an apparent improvement
+cannot be attributed to the change.
+
 ## Keeping yourself honest
 
 Record every case you ran, including the ones that went badly or whose protocol you broke. A

@@ -4,11 +4,11 @@ Passes differ by **what they are aimed at**, not by how hard they try. Repeating
 produces the same findings under new titles, and that is the main way a multi-pass hunt wastes
 money. This file settles the aiming, the dispatch mechanics, and when to stop.
 
-Two facts shape everything below. First, **the number of independent adversarial readings dominates
-recall** — more than prompt wording, more than model choice. Second, **aiming beats sweeping on a
-large or heavily audited codebase**, because an unaimed sweep spends the same effort on vanilla
-upstream code that three auditors already read. So: aim cheaply, then attack with as many
-independent readings as the budget allows.
+Two working hypotheses shape this loop. Independent readings may surface different mechanisms, and
+aiming may save effort on a large or heavily audited codebase. Neither should be treated as a
+universal law: model outputs can be correlated, and a ranking can hide an unranked path. Record
+unique coverage per reading, keep unexamined paths visible, and use held-out cases to decide whether
+extra passes earn their cost.
 
 ## Stage A — Aim (cheap, mechanical, not a hunt pass)
 
@@ -75,10 +75,10 @@ context converge on the first idea and stop being independent reviewers.
 with `known-hypotheses.md` now in the bundle, so each is explicitly hunting past its own earlier
 output, plus the `seam` lens over both passes' records.
 
-> **Where budget allows, dispatch each mechanism lens twice in pass 1, in two independent
-> contexts.** Two independent readings of the same lens find different things; this is the cheapest
-> recall increase available, and it costs only tokens. Doubling four lenses turns a 3-pass hunt from
-> roughly 14 readings into roughly 18. State in the summary how many readings actually ran.
+> **Where budget allows, dispatch a selected mechanism lens twice in pass 1, in separate
+> contexts.** Do this selectively: count distinct mechanisms and new covered paths, not just model
+> agreement. Repeated contexts cost real budget and may be correlated. State the readings that ran
+> and what unique coverage each added.
 
 ## Stage C — Seams
 
