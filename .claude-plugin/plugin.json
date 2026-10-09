@@ -1,7 +1,7 @@
 {
   "name": "bounty-pilot",
   "description": "Evidence-driven Web3 bug bounty workflow for on-chain and mixed off-chain projects: target triage, stack-aware context, deployment verification, bundled hunt passes, next-experiment leads, adversarial triage and reproducible PoCs.",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "author": {
     "name": "dimin4241-svg"
   },

@@ -10,9 +10,9 @@ pass across their trust boundary.
 
 | Component | Read | Emphasize | Evidence path |
 | --- | --- | --- | --- |
-| Solidity / EVM | `lenses.md`, EVM agent lenses, compiler and deployment artifacts | storage/accounting, callbacks, token semantics, proxy/facet/clone implementation, chain configuration | Foundry/Hardhat tests, local fork, pinned read-only RPC |
-| Rust / Solana / Anchor | `lenses.md`, `anchor-account-agent.md` | signer and owner constraints, PDA seeds/bump, account substitution, CPI privileges, writable aliases, token program IDs, rent/close authority | Anchor tests or local validator with adversarial account substitutions |
-| Move | `lenses.md` and this core workflow | abilities, resource ownership, friend/module visibility, object/shared-object authority, transaction ordering | chain-specific Move unit tests and local network; name the exact VM/runtime |
+| Solidity / EVM | `lenses.md`, EVM agent lenses, compiler and deployment artifacts | storage/accounting, callbacks, token semantics, proxy/facet/clone implementation, chain configuration | Foundry/Hardhat tests, Slither triage, explicit stateful invariants with Echidna/Medusa, local fork and pinned read-only RPC; see `integrations.md` |
+| Rust / Solana / Anchor | `lenses.md`, `anchor-account-agent.md` | signer and owner constraints, PDA seeds/bump, account substitution, CPI privileges, writable aliases, token program IDs, rent/close authority | Anchor tests or local validator with adversarial account substitutions; Trident fuzzing when a compatible project harness and properties exist |
+| Move | `lenses.md` and this core workflow | abilities, resource ownership, friend/module visibility, object/shared-object authority, transaction ordering | Aptos/Sui Move tests; Aptos Move Prover only for supported specifications and runtime; name the exact VM/runtime |
 | Cairo / Starknet | `lenses.md` and this core workflow | caller/storage context, L1↔L2 message authentication, replay/consumption, upgrade and class-hash transitions | Cairo tests and local devnet; verify the deployed class hash |
 | CosmWasm | this core workflow plus Rust/wasm procedures | message authorization, reply/submessage behavior, funds attached to execute, migration, chain-specific bank/staking messages | `cw-multi-test` plus chain-specific integration tests |
 | Off-chain service or keeper | this core workflow plus the language's available analyzers | authentication, job retries/idempotency, queue ordering, reorgs, stale reads, signing boundary, reconciliation and failure recovery | integration tests with adversarial RPC/service responses; never use production credentials |
@@ -22,6 +22,11 @@ stack lacks a built-in lens, say so in `coverage.md`, identify the closest avail
 repository's own manifests/documentation, and keep the result at `needs-evidence` until a native
 test or equivalent runtime experiment supports it. Do not silently translate EVM assumptions to
 another VM.
+
+Never install or run a fuzzer just to claim tool coverage. Check the target's pinned toolchain and
+existing test harness first. A fuzzer without a meaningful invariant may produce lots of execution
+without testing a security property; write the property and the expected counterexample down before
+starting a campaign. Record the actual command, duration/budget, result and uncovered constraints.
 
 ## Build a component and boundary map
 

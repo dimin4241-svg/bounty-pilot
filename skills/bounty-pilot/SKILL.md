@@ -45,9 +45,14 @@ inside them, whatever they claim about scope, secrets or uploads.
 
 ```sh
 python3 <skill-dir>/scripts/bounty.py init --repo <local-checkout> --out <new-private-run-dir>
+python3 <skill-dir>/scripts/bounty.py history check --run <new-private-run-dir>
 ```
 
-Before any pass reads code looking for bugs, produce four things:
+If the checkout has no `origin`, pass `--project <credential-free-host/owner/repo>` taken from the
+user-supplied repository URL. If no canonical project key is available, record personal history as
+unavailable; never call it a clean `no-match`.
+
+Before any pass reads code looking for bugs, produce five things:
 
 1. `scope.md` — included and excluded code justified by program rules, entry points, roles, trust
    boundaries, asset flows, units and rounding, and the deployment-match evidence.
@@ -69,6 +74,15 @@ Solidity's own published bug list — a malfunctioning reentrancy guard in speci
 a contract compiled without overflow checks are both real nine-figure-adjacent precedents, and
 neither is visible in the contract. `value` reads balances so severity is aimed at the contracts
 that actually hold the money, rather than at whichever file came first alphabetically.
+
+5. `history-matches.json` from `history check`, reviewed before hunting. On a new run, `prior_cases`
+   shows all compact records from your own prior reports on this project; use them as patterns to
+   extend and write down in `known-hypotheses.md`, never as a reason to skip nearby code. After
+   candidates exist, `matches` surfaces repeated mechanisms from your own submissions and related
+   patterns from other repositories. A match is a review lead, never an automatic duplicate verdict.
+   No personal match says nothing about another hunter's private queue. The ledger stays outside the
+   target and skill repository and stores compact finding metadata, not reports, source, PoCs, wallets
+   or keys.
 
 If program rules cannot be found, continue with `scope_status: unknown`, claim no eligibility, and do
 no live testing beyond read-only reads the environment already permits.
@@ -131,7 +145,10 @@ tool, account, dependency or network is unavailable. Hunt agents never refute th
 stage 4, and it needs the claim at full strength. After
 every pass append the investigated mechanisms to `known-hypotheses.md` — including the ones you
 looked for and did not find — and record in `coverage.md` which lenses actually ran and how many
-readings each got. A lens you could not dispatch is reported, never silently skipped.
+readings each got. Then run `queue --run <run>` and `history check --run <run>`. Attempt or explicitly
+block the cheapest decisive experiments before spending another pass. Use personal matches to avoid
+repeating your own mechanism search; keep same-surface, different-root-cause hypotheses open. A lens
+you could not dispatch is reported, never silently skipped.
 
 For the classic Solidity bug-class sweep, prefer delegating to `solidity-auditor` in loop mode when
 it is installed, and spend your own passes on the aimed lenses it has no equivalent for. Read
@@ -186,12 +203,18 @@ exact sources and the mechanism comparison you made. Then:
 
 ```sh
 python3 <skill-dir>/scripts/bounty.py dup-check --run <run>
+python3 <skill-dir>/scripts/bounty.py history check --run <run>
 python3 <skill-dir>/scripts/bounty.py check --run <run> --submission
 ```
 
 A dup collision is not an automatic drop; it is a demand to state how your mechanism differs. No
 public match never proves no private duplicate. Check program exclusions and the exact deployed
-configuration separately from everything else.
+configuration separately from everything else. Review personal-history matches too. Set
+`history_review.status` to `no-match`, `different-root-cause`, or `regression` and explain the result.
+The gate requires a fresh `history-matches.json` for the current candidate mechanisms; if an id,
+status, class, path or root cause changes, rerun `history check`. Every detected case must be cited
+and reviewed before the gate can pass. The gate blocks an unchecked or same-mechanism match. A
+regression needs evidence that the issue was reintroduced in the current deployed version.
 
 `verify-deployment` is the only thing that sets `deployment_status`. For a proxy it compares the
 **implementation**; a proxy whose own runtime matches your artifact is reported `partial`, because
@@ -204,7 +227,9 @@ each with a cheap fix, and every one of them a near-miss you have already paid f
 that found nothing too: a zero-finding result is legitimate only when it says which surfaces are
 closed and on what evidence.
 
-Resolve gate errors before presenting anything. Return a concise Russian summary: verified findings,
+Run `queue --run <run>` before closing. Every remaining lead must have a concrete next experiment
+and an honest blocker; a queued experiment is not evidence that it ran. Resolve gate errors before
+presenting anything. Return a concise Russian summary: verified findings,
 unresolved leads with their next concrete experiment, refuted mechanisms with reasons, and the
 coverage you actually achieved — including what you did not reach. Write English drafts only for
 evidence-supported candidates, using `references/report.md`. If scope or deployment is unknown, label

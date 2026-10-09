@@ -3,9 +3,11 @@ import importlib.util
 import io
 import json
 import subprocess
+import stat
 import urllib.error
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -443,17 +445,27 @@ class RunTests(unittest.TestCase):
         commit(self.repo, 'fixture')
         self.run = self.base / 'run'
         bounty.initialize(self.repo, self.run)
+        meta = bounty.read_json(self.run / 'run.json')
+        meta['project_key'] = 'example.invalid/test'
+        bounty.dump(self.run / 'run.json', meta)
+        self.ledger = self.base / 'private' / 'history.jsonl'
 
     def candidate(self):
         row = bounty.template()
         row.update(title='Example', root_cause='Example mechanism',
                    affected_paths=['src/Vault.sol'], bug_class='aggregate-not-decremented',
                    revision='abc1234', attacker_capabilities='Unprivileged caller',
-                   preconditions='Example state', impact='Demonstrated property change')
+                   preconditions='Example state', impact='Demonstrated property change',
+                   next_experiment={'question': 'Can an unprivileged user trigger the mismatch?',
+                                    'method': 'Run the local test with two actors and compare totals',
+                                    'expected_evidence': 'Assertion shows the user gain exceeds the ledger',
+                                    'blocker': ''})
         return row
 
     def check(self, row, submission=False):
         bounty.dump(self.run / 'findings.json', [row])
+        if submission:
+            bounty.history_check(self.run, self.ledger, project='example.invalid/test')
         return bounty.validate(self.run, submission=submission)
 
     def verified(self):
@@ -486,6 +498,8 @@ class RunTests(unittest.TestCase):
                           'sources': ['https://example.invalid/known-issues (read 2026-10-08)',
                                       'https://example.invalid/audit.pdf (no match on mechanism)']}
         row['evidence']['impact_quantification'] = '12,400 USDC of debt accounting, cost 0.002 ETH'
+        row['history_review'] = {'status': 'no-match', 'case_ids': [],
+                                 'rationale': 'Private history check returned no matches on 2026-10-09'}
         return row
 
     # ---- init ----
@@ -548,6 +562,37 @@ class RunTests(unittest.TestCase):
         row['status'] = 'refuted'
         self.assertTrue(any('refutation' in e for e in self.check(row)))
 
+    def test_open_candidate_requires_a_decisive_next_experiment(self):
+        row = self.candidate()
+        row['next_experiment'] = {'question': '', 'method': '', 'expected_evidence': ''}
+        errors = self.check(row)
+        for field in ('question', 'method', 'expected_evidence'):
+            self.assertTrue(any('next_experiment.' + field in error for error in errors))
+
+    def test_queue_lists_every_open_candidate_with_its_experiment(self):
+        row = self.candidate()
+        row['status'] = 'needs-evidence'
+        bounty.dump(self.run / 'findings.json', [row])
+        result = bounty.lead_queue(self.run)
+        self.assertEqual(result['open_count'], 1)
+        self.assertEqual(result['leads'][0]['next_experiment']['question'],
+                         row['next_experiment']['question'])
+
+    def test_queue_refuses_to_hide_a_lead_without_a_next_step(self):
+        row = self.candidate()
+        row['next_experiment']['method'] = ''
+        bounty.dump(self.run / 'findings.json', [row])
+        result = bounty.lead_queue(self.run)
+        self.assertEqual(result['state'], 'invalid')
+        self.assertTrue(any('next_experiment.method' in e for e in result['errors']))
+
+    def test_terminal_candidate_does_not_need_a_next_experiment(self):
+        row = self.candidate()
+        row['next_experiment'] = {}
+        row['status'] = 'refuted'
+        row['rejection_reason'] = 'The caller is checked against the recorded owner.'
+        self.assertEqual(self.check(row), [])
+
     def test_public_novelty_claim_requires_sources(self):
         row = self.candidate()
         row['novelty'] = {'status': 'no-public-match-found', 'sources': []}
@@ -589,6 +634,45 @@ class RunTests(unittest.TestCase):
     def test_submission_gate_passes_a_complete_record(self):
         self.assertEqual(self.check(self.submittable(), submission=True), [])
 
+    def test_submission_gate_requires_a_fresh_personal_history_result(self):
+        row = self.submittable()
+        self.assertEqual(self.check(row, submission=True), [])
+        meta = bounty.read_json(self.run / 'run.json')
+        meta['history_project_key'] = 'example.invalid/other-project'
+        bounty.dump(self.run / 'run.json', meta)
+        errors = bounty.validate(self.run, submission=True)
+        self.assertTrue(any('project key changed' in error for error in errors))
+        meta['history_project_key'] = 'example.invalid/test'
+        bounty.dump(self.run / 'run.json', meta)
+        records = bounty.read_json(self.run / 'findings.json')
+        records[0]['root_cause'] = 'Changed after personal history comparison'
+        bounty.dump(self.run / 'findings.json', records)
+        errors = bounty.validate(self.run, submission=True)
+        self.assertTrue(any('candidate mechanisms changed' in error for error in errors))
+        (self.run / 'history-matches.json').unlink()
+        errors = bounty.validate(self.run, submission=True)
+        self.assertTrue(any('run history check before submission' in error for error in errors))
+
+    def test_submission_gate_cannot_ignore_a_detected_personal_history_match(self):
+        row = self.submittable()
+        prior = bounty.history_import(
+            'example.invalid/test', 'OLD-001', row['bug_class'], row['affected_paths'],
+            row['root_cause'], 'duplicate', self.ledger, reason='private-duplicate')
+        errors = self.check(row, submission=True)
+        self.assertTrue(any('matching cases; review them' in error for error in errors))
+        row['history_review'] = {
+            'status': 'different-root-cause', 'case_ids': [prior['case_id']],
+            'rationale': 'Same file, but the earlier report is a separate accounting path.'}
+        self.assertEqual(self.check(row, submission=True), [])
+        row['history_review'] = {
+            'status': 'regression', 'case_ids': [prior['case_id']],
+            'rationale': 'The patch to the accounting write was later removed.',
+            'evidence': 'Current deployed bytecode matches commit f00ba4; the local PoC reproduces at the pinned block.'}
+        self.assertEqual(self.check(row, submission=True), [])
+        row['history_review']['case_ids'] = []
+        errors = self.check(row, submission=True)
+        self.assertTrue(any('cover every match' in error for error in errors))
+
     def test_submission_gate_blocks_undeployed_revision(self):
         row = self.submittable()
         row['deployment_status'] = 'unknown'
@@ -621,6 +705,28 @@ class RunTests(unittest.TestCase):
         del row['evidence']['impact_quantification']
         self.assertTrue(any('impact_quantification' in e
                             for e in self.check(row, submission=True)))
+
+    def test_submission_gate_requires_personal_history_review(self):
+        row = self.submittable()
+        row['history_review'] = {'status': 'unchecked', 'case_ids': [], 'rationale': ''}
+        self.assertTrue(any('personal history was not checked' in e
+                            for e in self.check(row, submission=True)))
+        row['history_review'] = {'status': 'same-mechanism', 'case_ids': ['H-123'],
+                                 'rationale': 'Same root cause as an earlier report'}
+        self.assertTrue(any('same mechanism' in e
+                            for e in self.check(row, submission=True)))
+
+    def test_submission_gate_requires_reasoned_history_collision_review(self):
+        row = self.submittable()
+        row['history_review'] = {'status': 'different-root-cause', 'case_ids': [],
+                                 'rationale': 'different function'}
+        self.assertTrue(any('requires case_ids' in e
+                            for e in self.check(row, submission=True)))
+        row['history_review'] = {'status': 'regression', 'case_ids': ['H-123'],
+                                 'rationale': ''}
+        errors = self.check(row, submission=True)
+        self.assertTrue(any('mechanism comparison' in e for e in errors))
+        self.assertTrue(any('regression requires evidence' in e for e in errors))
 
     def test_submission_gate_refuses_an_empty_file(self):
         self.assertTrue(any('no records' in e for e in bounty.validate(self.run, submission=True)))
@@ -726,6 +832,186 @@ class RunTests(unittest.TestCase):
         self.assertTrue(any('source' in e for e in errors))
 
 
+class HistoryTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name)
+        self.repo = self.base / 'repo'
+        (self.repo / 'src').mkdir(parents=True)
+        git(self.repo, 'init', '-q')
+        git(self.repo, 'remote', 'add', 'origin',
+            'https://user:secret@example.invalid/org/vault.git')
+        (self.repo / 'src/Vault.sol').write_text('contract Vault {}\n')
+        commit(self.repo, 'fixture')
+        self.run = self.base / 'run'
+        bounty.initialize(self.repo, self.run)
+        row = bounty.template()
+        row.update(title='Fee accounting can be withdrawn twice', status='verified',
+                   severity='medium', root_cause='Withdraw does not decrement accrued fee',
+                   affected_paths=['src/Vault.sol:Vault.withdraw'],
+                   bug_class='fee-accounting-not-decremented', revision='abc1234',
+                   attacker_capabilities='Unprivileged depositor',
+                   preconditions='A fee has accrued', impact='Fee can be claimed twice')
+        (self.run / 'poc.py').write_text('assert True\n')
+        (self.run / 'log.txt').write_text('reproduced\n')
+        row['evidence'] = {'command': 'python3 poc.py', 'exit_code': 0,
+                           'log_path': 'log.txt', 'poc_path': 'poc.py',
+                           'assertion': 'Fee total increases twice',
+                           'negative_control': 'control did not increase total',
+                           'source_integrity': 'Original checkout; no storage edits'}
+        bounty.dump(self.run / 'findings.json', [row])
+        self.ledger = self.base / 'private' / 'history.jsonl'
+
+    def test_project_key_strips_credentials_and_git_suffix(self):
+        self.assertEqual(bounty.canonical_project(
+            'https://researcher:token@example.invalid/org/vault.git'),
+            'example.invalid/org/vault')
+        self.assertEqual(bounty.read_json(self.run / 'run.json')['project_key'],
+                         'example.invalid/org/vault')
+
+    def test_history_record_is_private_and_contains_no_report_artifacts(self):
+        result = bounty.history_record(self.run, 'BP-001', 'duplicate', self.ledger,
+                                       program='Cantina', reason='private-duplicate', hours=3.5)
+        self.assertTrue(result['case_id'].startswith('H-'))
+        self.assertEqual(stat.S_IMODE(self.ledger.stat().st_mode), 0o600)
+        stored = json.loads(self.ledger.read_text().splitlines()[0])
+        self.assertEqual(stored['project_key'], 'example.invalid/org/vault')
+        self.assertEqual(stored['disposition'], 'duplicate')
+        for private_key in ('report_text', 'source', 'poc_path', 'wallet', 'credentials'):
+            self.assertNotIn(private_key, stored)
+
+    def test_history_record_recovers_project_key_from_target_remote(self):
+        meta = bounty.read_json(self.run / 'run.json')
+        meta['project_key'] = None
+        bounty.dump(self.run / 'run.json', meta)
+        result = bounty.history_record(self.run, 'BP-001', 'submitted', self.ledger)
+        stored = json.loads(self.ledger.read_text().splitlines()[0])
+        self.assertEqual(stored['project_key'], 'example.invalid/org/vault')
+        self.assertEqual(result['disposition'], 'submitted')
+
+    def test_explicit_project_key_is_reused_by_later_history_commands(self):
+        git(self.repo, 'remote', 'remove', 'origin')
+        meta = bounty.read_json(self.run / 'run.json')
+        meta['project_key'] = None
+        bounty.dump(self.run / 'run.json', meta)
+        first = bounty.history_check(self.run, self.ledger, project='example.invalid/org/vault')
+        self.assertEqual(first['project_key'], 'example.invalid/org/vault')
+        second = bounty.history_check(self.run, self.ledger)
+        self.assertEqual(second['project_key'], 'example.invalid/org/vault')
+        recorded = bounty.history_record(self.run, 'BP-001', 'submitted', self.ledger)
+        stored = json.loads(self.ledger.read_text().splitlines()[0])
+        self.assertEqual(recorded['disposition'], 'submitted')
+        self.assertEqual(stored['project_key'], 'example.invalid/org/vault')
+
+    def test_history_record_reports_missing_project_instead_of_crashing(self):
+        git(self.repo, 'remote', 'remove', 'origin')
+        meta = bounty.read_json(self.run / 'run.json')
+        meta['project_key'] = None
+        bounty.dump(self.run / 'run.json', meta)
+        with self.assertRaisesRegex(ValueError, 'No canonical repository remote'):
+            bounty.history_record(self.run, 'BP-001', 'submitted', self.ledger)
+
+    def test_history_permissions_have_a_portable_fallback(self):
+        with mock.patch.object(bounty.os, 'fchmod', None, create=True):
+            bounty.history_record(self.run, 'BP-001', 'submitted', self.ledger)
+        self.assertEqual(stat.S_IMODE(self.ledger.stat().st_mode), 0o600)
+
+    def test_history_check_surfaces_same_project_matches_without_calling_them_duplicates(self):
+        recorded = bounty.history_record(self.run, 'BP-001', 'submitted', self.ledger)
+        next_run = self.base / 'run-again'
+        bounty.initialize(self.repo, next_run)
+        bounty.dump(next_run / 'findings.json', json.loads((self.run / 'findings.json').read_text()))
+        result = bounty.history_check(next_run, self.ledger)
+        self.assertEqual(result['state'], 'review-required')
+        match = result['matches'][0]
+        self.assertEqual(match['case_id'], recorded['case_id'])
+        self.assertIn('same-project', match['relationship'])
+        self.assertIn('not an automatic duplicate', match['relationship'])
+        self.assertTrue((next_run / 'history-matches.json').is_file())
+
+    def test_history_check_seeds_the_first_pass_with_own_prior_cases(self):
+        recorded = bounty.history_record(self.run, 'BP-001', 'paid', self.ledger)
+        empty_run = self.base / 'empty-run'
+        bounty.initialize(self.repo, empty_run)
+        result = bounty.history_check(empty_run, self.ledger)
+        self.assertEqual(result['matches'], [])
+        self.assertEqual(result['prior_cases_total'], 1)
+        self.assertEqual(result['prior_cases'][0]['case_id'], recorded['case_id'])
+        self.assertIn('Withdraw does not decrement',
+                      result['prior_cases'][0]['root_cause_summary'])
+
+    def test_old_report_can_be_imported_without_copying_its_report_text(self):
+        imported = bounty.history_import(
+            'https://example.invalid/org/vault.git', 'C4-123',
+            'fee-accounting-not-decremented', ['src/Vault.sol:Vault.withdraw'],
+            'Withdraw fails to decrement the accrued fee', 'duplicate', self.ledger,
+            program='Code4rena', reason='private-duplicate', lens='accounting')
+        self.assertEqual(imported['disposition'], 'duplicate')
+        stored = json.loads(self.ledger.read_text().splitlines()[0])
+        self.assertEqual(stored['finding_id'], 'C4-123')
+        self.assertNotIn('report_text', stored)
+        self.assertNotIn('poc_path', stored)
+        result = bounty.history_check(self.run, self.ledger)
+        self.assertEqual(result['matches'][0]['case_id'], imported['case_id'])
+
+    def test_same_run_report_does_not_match_itself(self):
+        bounty.history_record(self.run, 'BP-001', 'submitted', self.ledger)
+        result = bounty.history_check(self.run, self.ledger)
+        self.assertEqual(result['matches'], [])
+
+    def test_cross_project_match_is_only_a_related_pattern(self):
+        bounty.history_record(self.run, 'BP-001', 'accepted', self.ledger)
+        next_run = self.base / 'fork-run'
+        bounty.initialize(self.repo, next_run)
+        bounty.dump(next_run / 'findings.json', json.loads((self.run / 'findings.json').read_text()))
+        result = bounty.history_check(next_run, self.ledger, project='example.invalid/forked-vault')
+        self.assertEqual(result['matches'][0]['relationship'],
+                         'other project: related pattern, not a duplicate')
+
+    def test_history_summary_uses_latest_event_per_case(self):
+        first = bounty.history_record(self.run, 'BP-001', 'duplicate', self.ledger)
+        bounty.history_record(self.run, 'BP-001', 'paid', self.ledger, case_id=first['case_id'])
+        summary = bounty.history_summary(self.ledger)
+        self.assertEqual(summary['reports'], 1)
+        self.assertEqual(summary['dispositions']['paid'], 1)
+        self.assertEqual(summary['dispositions']['duplicate'], 0)
+        self.assertEqual(summary['duplicate_of_decided'], '0 of 1')
+
+    def test_case_id_cannot_be_reused_for_a_different_report(self):
+        first = bounty.history_record(self.run, 'BP-001', 'submitted', self.ledger)
+        second_run = self.base / 'run-other-finding'
+        bounty.initialize(self.repo, second_run)
+        (second_run / 'poc.py').write_text('assert True\n')
+        (second_run / 'log.txt').write_text('reproduced\n')
+        first_finding = json.loads((self.run / 'findings.json').read_text())[0]
+        first_finding['id'] = 'BP-002'
+        bounty.dump(second_run / 'findings.json', [first_finding])
+        with self.assertRaisesRegex(ValueError, 'different report'):
+            bounty.history_record(second_run, 'BP-002', 'paid', self.ledger,
+                                  case_id=first['case_id'])
+
+    def test_history_file_inside_target_is_refused(self):
+        with self.assertRaisesRegex(ValueError, 'outside the target'):
+            bounty.history_check(self.run, self.repo / 'history.jsonl')
+
+    def test_corrupt_history_is_an_error_not_a_clean_result(self):
+        self.ledger.parent.mkdir()
+        self.ledger.write_text('{not-json}\n')
+        with self.assertRaisesRegex(ValueError, 'line 1'):
+            bounty.history_check(self.run, self.ledger)
+
+    def test_structurally_corrupt_history_fields_are_reported(self):
+        self.ledger.parent.mkdir()
+        self.ledger.write_text(json.dumps({
+            'schema_version': 1, 'case_id': 'H-bad', 'recorded_at': 'today',
+            'project_key': 'example.invalid/repo', 'finding_id': 'old',
+            'bug_class': 'unsafe-math', 'affected_paths': [],
+            'root_cause_summary': 'root cause', 'disposition': 'paid'}) + '\n')
+        with self.assertRaisesRegex(ValueError, 'invalid affected_paths'):
+            bounty.history_check(self.run, self.ledger)
+
+
 class BundleTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -788,7 +1074,9 @@ class BundleTests(unittest.TestCase):
         row = bounty.template()
         row.update(title='t', root_cause='r', affected_paths=['src/Vault.sol'],
                    bug_class='x-y', revision='abc', attacker_capabilities='a',
-                   preconditions='p', impact='i')
+                   preconditions='p', impact='i',
+                   next_experiment={'question': 'q', 'method': 'm',
+                                    'expected_evidence': 'e', 'blocker': ''})
         run = self.run
         row['lens'] = 'accounting'
         bounty.dump(run / 'findings.json', [row])
@@ -1246,6 +1534,15 @@ class CliTests(unittest.TestCase):
         parser = bounty.build_parser()
         for argv in (['init', '--repo', '.', '--out', 'x'], ['check', '--run', 'x'],
                      ['check', '--run', 'x', '--submission'], ['dup-check', '--run', 'x'],
+                     ['queue', '--run', 'x'],
+                     ['history', 'check', '--run', 'x'],
+                     ['history', 'record', '--run', 'x', '--finding', 'BP-001',
+                      '--outcome', 'submitted'],
+                     ['history', 'import', '--project', 'github.com/org/repo',
+                      '--finding-id', 'C4-001', '--bug-class', 'bad-accounting',
+                      '--surface', 'src/Vault.sol:withdraw', '--root-cause', 'missing decrement',
+                      '--outcome', 'duplicate'],
+                     ['history', 'summary'],
                      ['delta', '--repo', '.', '--since', 'HEAD'],
                      ['bundle', '--repo', '.', '--run', 'x', '--lens', 'attack'],
                      ['bundle', '--repo', '.', '--run', 'x', '--lens', 'triage'],

@@ -112,31 +112,38 @@ What the output gives you, and what each number is worth:
 
 ## Measure the live funnel separately
 
-Backtests compare rediscovery and misses, but cannot estimate private duplicates, program
-eligibility, acceptance or payment. Keep a private, target-specific ledger with one row per report:
-effort, whether the PoC reproduced from a clean checkout, public match, scope decision, triage
-status, accepted severity and reward status/date. Attribute discoveries to a lens only when the run
-record supports it. Do not turn a small personal sample into a payout probability, and never put
-target identities, report text, wallet addresses or private outcomes in the public toolkit.
+Backtests measure rediscovery on published cases. They cannot reveal your platform's private queue or
+predict acceptance. Keep report outcomes locally so the next run can spot repeated mechanisms and
+you can see which kinds of reports get rejected.
 
-Use the ledger to ask which target shapes produce fewer duplicates, which lenses produce candidates
-that survive reproduction, and where reports are rejected. Change one workflow factor at a time and
-keep the old baseline; otherwise an apparent improvement cannot be attributed to the change.
+```sh
+S=<skill-dir>/scripts/bounty.py
+python3 $S history check --run <run>
+python3 $S history record --run <run> --finding BP-001 --outcome submitted \
+    --program "Cantina / Example" --hours 4
+# Later, reuse the printed case id when a decision arrives.
+python3 $S history record --run <run> --finding BP-001 --outcome duplicate \
+    --case-id <full-id-printed-by-first-command> --reason private-duplicate
+python3 $S history summary
+python3 $S history import --project https://github.com/org/repo \
+    --finding-id C4-123 --bug-class accounting-dust --surface src/Vault.sol:withdraw \
+    --root-cause "withdraw does not decrement accrued fees" --outcome duplicate
+```
 
-## Measure the live funnel separately
+The default JSONL file is `~/.bounty-pilot/history.jsonl`; set `--ledger` to choose another private
+path. The helper creates it with owner-only permissions and refuses to place it inside the target,
+run or skill. It stores the project key, bug class, paths, a short mechanism summary, lens, program,
+outcome, reason category and effort. It never stores report text, source files, PoCs, wallet addresses
+or credentials. Seed older reports with `history import` only when their mechanism metadata can be
+verified against the original; do not reconstruct missing details from memory as if they were facts.
 
-Backtests can compare rediscovery and misses, but they cannot estimate private duplicates, program
-eligibility, acceptance or payment. Keep a private, target-specific ledger with one row per submitted
-report: time/cost to investigate, whether the PoC reproduced from a clean checkout, public match,
-scope decision, triage status, severity accepted, and reward status/date. Attribute discoveries to a
-lens only when the run record supports it. Do not turn a small personal sample into a payout
-probability, and never put target identities, report text, wallet addresses or private outcomes in
-the public skill repository.
-
-Use the ledger to answer practical tuning questions: which target shapes produce fewer duplicates,
-which lens produces candidates that survive reproduction, and where reports are most often rejected.
-Change one workflow factor at a time and keep the old baseline; otherwise an apparent improvement
-cannot be attributed to the change.
+On an empty new run, `history check` returns every compact prior case for that repository in
+`prior_cases`; review them before the first pass and add the mechanisms as hunt leads, never as
+surfaces to skip. After candidates exist, it reports exact project/class/path overlaps first and
+related cross-project patterns second. These are recall-oriented suggestions; inspect root cause and
+revision yourself. Never let the helper declare a duplicate or suppress a candidate.
+`history summary` reports counts from your own recorded reports, not payout odds. Use those counts
+to change one workflow factor at a time and keep the old baseline.
 
 ## Keeping yourself honest
 

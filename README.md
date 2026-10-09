@@ -80,9 +80,11 @@ Alternatively, copy `skills/bounty-pilot` into your agent's supported skills dir
 | **Live-constant checks** | Reads a hardcoded index, address, decimal or feed id against live chain state, because a constant is a claim about the outside world |
 | **Eight aimed lenses** | Hunts time, lineage, observability, aggregates, parameter authorization, persistence, live truth and the Solana account model |
 | **Separated generation and refutation** | Hunt passes state claims at full strength; a later pass attacks each one against five triage gates plus a separate evidence check |
-| **Evidence requirements** | A verified finding needs a local PoC, exit code, log, assertion, negative control and a source-integrity explanation |
-| **Submission gate** | Refuses what programs actually reject: undeployed revision, unestablished scope, unassessed severity, no rubric citation, thin novelty check, unquantified impact |
+| **Evidence requirements** | Verified findings need a reproducible PoC, negative control, impact numbers and source-integrity evidence; every open lead needs a decisive next experiment |
+| **Submission gate** | Checks deployment, scope, severity, novelty, impact, objections and a fresh personal-history comparison before a report is ready |
 | **Resumable findings** | Preserves hypotheses and rejection reasons; reopens a candidate when the protection that refuted it is edited |
+| **Open-lead queue** | Keeps every unclosed candidate visible with the question, test method and evidence that would settle it |
+| **Personal history** | Seeds the first pass with your own prior reports and makes the final gate account for every detected personal match |
 | **Private report drafts** | Produces English submission drafts without automatically sending or publishing them |
 
 ## How it works
@@ -209,7 +211,7 @@ Inspect and pin upstream revisions before use. Delegate bounded tasks instead of
 | [PoC templates](skills/bounty-pilot/templates) | Fork, local, invariant and Solana harnesses |
 | [bounty.py](skills/bounty-pilot/scripts/bounty.py) | Run scaffolding, delta, triage, on-chain checks, gates |
 | [keccak.py](skills/bounty-pilot/scripts/keccak.py) | Dependency-free Keccak-256, so proxy slots are derived, not pasted |
-| [Tests](tests/test_bounty.py) | 61 helper regression checks |
+| [Tests](tests/test_bounty.py) | 147 helper regression and workflow checks |
 
 ```sh
 S=skills/bounty-pilot/scripts/bounty.py
@@ -219,6 +221,7 @@ python3 $S score-target --repo /path/to/target --program run/program.json
 
 # Use a new private directory outside both the target and the skill package.
 python3 $S init --repo /path/to/target --out /path/to/private/new-run
+python3 $S history check --run /path/to/private/new-run
 
 # Assemble one bundle per lens: SOP + rules + lens procedure + context + in-scope source.
 python3 $S bundle --repo /path/to/target --run run --lens attack --scope src/
@@ -248,6 +251,11 @@ python3 $S backtest init  --name c4-example --repo /path/to/target --commit <rev
 python3 $S backtest seal  --case private/backtests/c4-example --run private/runs/c4-example
 python3 $S backtest score --case private/backtests/c4-example
 
+# Review all open leads and private-history matches before submission.
+python3 $S queue --run /path/to/private/new-run
+python3 $S history check --run /path/to/private/new-run
+python3 $S history summary
+
 # Gates.
 python3 $S dup-check --run /path/to/private/new-run
 python3 $S check     --run /path/to/private/new-run [--submission]
@@ -260,7 +268,7 @@ python3 -m unittest discover -s tests -v
 
 `bundle` is the dispatch mechanic, not a convenience: a pass that skipped it handed its lenses less than they needed. Only the `coverage-gap` lens receives the test and mock files, because reading tests adversarially is its job and nobody else's.
 
-`check` does not verify exploit truth, severity, originality or payout eligibility, and an empty finding list passes its structural checks. `check --submission` adds the readiness gates — including a recorded triage exchange with no sustained objection — and a green gate still means "nothing obviously missing", never "this is valid".
+`check` does not verify exploit truth, severity, originality or payout eligibility, and an empty finding list passes its structural checks. `check --submission` also requires a current `history-matches.json` for the candidate mechanisms and every detected personal-history match to be reviewed. Rerun `history check` if a finding's id, status, class, affected paths or root cause changes. A green gate still means "nothing obviously missing", never "this is valid".
 
 ## FAQ
 
@@ -272,6 +280,9 @@ second seal, and voids a case whose sealed output changed afterwards. Run it on 
 you will have a count instead of an argument. Read
 [backtest.md](skills/bounty-pilot/references/backtest.md) first — a rediscovery count measures the
 hunt, not the funnel, and it does not predict a payout. What changed is where effort goes: toward unreviewed code, unburned surfaces, what is actually deployed, and the impact class the evidence reaches — and away from re-deriving a program's published known issues. The reasoning is stated so you can disagree with it; it is not a payout guarantee.
+
+**What does the private history remember?**  
+It keeps compact metadata in `~/.bounty-pilot/history.jsonl`. Before the first pass, `history check` shows your prior findings on the same project; after candidates appear, it compares their mechanisms with that history. The file is created with owner-only permissions and stores no report text, source, PoCs, wallet addresses or credentials. Matches are review prompts, not duplicate verdicts, and it cannot see other hunters' private submissions.
 
 **What does it do that a code-reading pass cannot?**  
 Three things, each with a precedent. It checks the **compiler** against Solidity's published bug list — a malfunctioning reentrancy guard in specific Vyper versions and a contract compiled without overflow checks are both real nine-figure-adjacent incidents, invisible in the contract. It checks **constants and configuration against the live chain**, where a feed index that names one asset and selects another looks perfectly fine in source. And it reads **balances**, so severity is aimed at the contract holding the treasury rather than the file that sorts first.
