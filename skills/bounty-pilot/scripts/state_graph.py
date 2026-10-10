@@ -136,6 +136,22 @@ def scan(root, limit=600):
                               "token": dst["symbol"], "confidence": "low"})
     sequences = [{"actions": [e["from"], e["to"]], "shared_token": e["token"],
                   "status": "unverified-seed"} for e in edges[:150]]
+    # Bounded three-step candidates: the intermediate operation links two observed
+    # lexical edges. This still says nothing about real ordering or reachability.
+    successors = {}
+    for e in edges:
+        successors.setdefault(e["from"], []).append(e)
+    for first in edges[:500]:
+        if len(sequences) >= 300:
+            break
+        for second in successors.get(first["to"], [])[:10]:
+            if second["to"] in (first["from"], first["to"]):
+                continue
+            sequences.append({"actions": [first["from"], first["to"], second["to"]],
+                              "shared_token": first["token"] + " / " + second["token"],
+                              "status": "unverified-seed"})
+            if len(sequences) >= 300:
+                break
     return {
         "schema": 1, "source": str(root), "method": "regex-lexical-heuristic",
         "sound": False, "reachability_verified": False, "in_scope_files": len(files),
