@@ -69,6 +69,15 @@ REQUIRED = ('id', 'title', 'status', 'severity', 'bug_class', 'revision', 'root_
             'rejection_reason')
 
 
+def load_stack_route():
+    """Load bundled manifest router; its output is always heuristic."""
+    path = Path(__file__).resolve().parent / 'stack_route.py'
+    spec = importlib.util.spec_from_file_location('bp_stack_route', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def load_keccak():
     path = Path(__file__).resolve().parent / 'keccak.py'
     spec = importlib.util.spec_from_file_location('bp_keccak', path)
@@ -1211,6 +1220,7 @@ def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
     root = Path(git(repo, 'rev-parse', '--show-toplevel').strip()).resolve()
     commit = git(root, 'rev-parse', 'HEAD').strip()
     references = SKILL_ROOT / 'references'
+    routed = load_stack_route().route(root)
     chosen = []
     for lens in lenses:
         if lens == 'all':
@@ -1328,6 +1338,15 @@ def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
         if sop:
             pieces.append(sop)
         pieces += [shared, lens_text]
+        if lens in LOGIC_LENSES + CROSS_STACK_LENSES + ('anchor-account',):
+            guide = references / 'stateful-search.md'
+            if guide.is_file():
+                pieces.append(guide.read_text(encoding='utf-8'))
+            for selected_stack in routed['stacks']:
+                adapter = references / selected_stack['adapter']
+                if adapter.is_file():
+                    pieces.append('# Adapter for ' + selected_stack['stack'] + '\n\n'
+                                  + adapter.read_text(encoding='utf-8'))
         # The ladder tells the lens how far to escalate; the precedents make a candidate concrete
         # and much harder for triage to call theoretical.
         for extra in (impact, patterns):
@@ -1362,6 +1381,7 @@ def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
         notes.append(f'{len(config_skipped)} configuration file(s) unreadable and omitted: '
                      + ', '.join(config_skipped[:5]))
     return {'target': str(root), 'commit': commit, 'run': str(run),
+            'detected_stacks_heuristic': [x['stack'] for x in routed['stacks']],
             'in_scope_files': len(in_scope), 'test_files_bundled_for_coverage_gap': len(test_paths),
             'test_files_omitted': len(tests_omitted),
             'config_files_bundled': len(config_paths) - len(config_skipped),
@@ -2404,6 +2424,9 @@ def build_parser():
     bnd.add_argument('--include', action='append', default=None,
                      help='extra context file to append, e.g. a delta ranking. Repeatable.')
 
+    route_parser = sub.add_parser('route', help='recommend native adapters from tracked manifests (heuristic)')
+    route_parser.add_argument('--repo', required=True)
+
     score = sub.add_parser('score-target', help='prioritise a target from code and program facts')
     score.add_argument('--repo', required=True)
     score.add_argument('--program', required=True, help='JSON of published program facts')
@@ -2502,6 +2525,9 @@ def main(argv=None):
         if args.action == 'bundle':
             print(json.dumps(bundle(args.repo, args.run, args.lens, args.scope,
                                     args.include), indent=2))
+            return 0
+        if args.action == 'route':
+            print(json.dumps(load_stack_route().route(args.repo), indent=2))
             return 0
         if args.action == 'score-target':
             print(json.dumps(score_target(args.repo, args.program), indent=2))
