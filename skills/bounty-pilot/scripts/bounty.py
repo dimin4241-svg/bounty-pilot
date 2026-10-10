@@ -1008,7 +1008,8 @@ def delta(repo, since, scope_prefixes=None, limit=40):
 
 LENSES = ('delta', 'upstream-diff', 'coverage-gap', 'privileged-path', 'accounting',
           'integration-auth', 'external-call', 'economics', 'liveness', 'upgrade',
-          'live-reality', 'anchor-account', 'seam')
+          'live-reality', 'anchor-account', 'seam', 'business-logic',
+          'temporal-logic', 'recovery-failure', 'semantic-mismatch', 'composition')
 TRIAGE = 'triage'
 AIM_LENSES = ('delta', 'upstream-diff', 'coverage-gap')
 # The six highest-yield mechanism lenses. privileged-path leads because access control and
@@ -1017,6 +1018,8 @@ AIM_LENSES = ('delta', 'upstream-diff', 'coverage-gap')
 ATTACK_LENSES = ('privileged-path', 'accounting', 'integration-auth', 'external-call',
                  'economics', 'liveness')
 CONFIG_LENSES = ('live-reality', 'upgrade')
+LOGIC_LENSES = ('business-logic', 'temporal-logic', 'composition')
+CROSS_STACK_LENSES = ('semantic-mismatch', 'recovery-failure')
 BUNDLE_WARN_BYTES = 400_000
 
 BUNDLE_HEADER = """# Hunt bundle: {lens}
@@ -1218,11 +1221,15 @@ def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
             chosen.extend(ATTACK_LENSES)
         elif lens == 'config':
             chosen.extend(CONFIG_LENSES)
+        elif lens == 'logic':
+            chosen.extend(LOGIC_LENSES)
+        elif lens == 'cross-stack':
+            chosen.extend(CROSS_STACK_LENSES)
         elif lens in LENSES or lens == TRIAGE:
             chosen.append(lens)
         else:
             raise ValueError(f'unknown lens {lens!r}; choose from ' + ', '.join(LENSES)
-                             + f', {TRIAGE}, or the groups aim / attack / config / all')
+                             + f', {TRIAGE}, or the groups aim / attack / config / logic / cross-stack / all')
     chosen = list(dict.fromkeys(chosen))
     for lens in chosen:
         source_file = (references / f'{TRIAGE}.md' if lens == TRIAGE
@@ -1262,7 +1269,7 @@ def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
                      if config_omitted else '') + configs)
 
     context = []
-    for name in ('scope.md', 'dup-map.json', 'known-hypotheses.md'):
+    for name in ('scope.md', 'model.md', 'coverage.md', 'dup-map.json', 'known-hypotheses.md'):
         path = run / name
         if path.is_file() and path.stat().st_size > 0:
             body = path.read_text(encoding='utf-8')
@@ -1326,7 +1333,7 @@ def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
         for extra in (impact, patterns):
             if extra:
                 pieces.append(extra)
-        if lens == 'seam' and findings_doc:
+        if lens in ('seam', 'composition') and findings_doc:
             pieces.append(findings_doc.replace('Attack these. Nothing here is established.',
                                                'The earlier passes produced these. Cross them.'))
         if context_doc:
@@ -1334,7 +1341,7 @@ def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
         if config_doc:
             pieces.append(config_doc)
         pieces.append(source_doc)
-        if lens == 'coverage-gap':
+        if lens in ('coverage-gap', 'business-logic', 'temporal-logic', 'composition'):
             pieces.append(tests_doc)
         pieces.append(BUNDLE_FOOTER.format(lens=lens, target=root.name, commit=commit))
         path = out / f'{lens}-bundle.md'
@@ -2392,7 +2399,7 @@ def build_parser():
     bnd.add_argument('--repo', required=True)
     bnd.add_argument('--run', required=True)
     bnd.add_argument('--lens', action='append', required=True,
-                     help='lens name, or a group: aim, attack, all. Repeatable.')
+                     help='lens name, or a group: aim, attack, config, logic, cross-stack, all. Repeatable.')
     bnd.add_argument('--scope', action='append', default=None, help='path prefix to keep')
     bnd.add_argument('--include', action='append', default=None,
                      help='extra context file to append, e.g. a delta ranking. Repeatable.')

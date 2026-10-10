@@ -1,0 +1,3 @@
+# Go backend / chain node / keeper adapter
+
+Map go.mod modules, services, daemon entrypoints, persistent stores, goroutines, channels and RPC trust boundaries. Hunt arithmetic and time bugs, slice/map aliasing, error paths with lost acknowledgement, defer/recover behavior, retry idempotency, races, consensus determinism and integer conversions between Go/JSON/chain. Check mutex ordering, context cancellation, channels under slow consumers, unbounded workers, leader/follower consistency, and reorg handling. Use `go test ./...`, native fuzz tests, `go test -race` when supported, deterministic fault injection for restarts, and real interface round trips. Never label an ordinary panic as a protocol-wide outage without reproducing the process supervision and blast radius.

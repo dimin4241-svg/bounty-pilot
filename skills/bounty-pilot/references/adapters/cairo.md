@@ -1,0 +1,3 @@
+# Cairo / Starknet adapter
+
+Resolve compiler/scarb version, contract class hash, account abstraction, proxy/dispatcher and actual L1↔L2 bridge semantics. Audit calldata deserialization, caller vs contract address, account signature validation, nonce/domain/replay, felt/u256 conversion, storage layout, components, event/message consumption, class replacement and upgrades. Construct native Starknet Foundry tests and account for chain-specific transaction/revert/fee behavior; no Solidity storage or gas assumptions. For async messaging, model message uniqueness, expiry, consumption and refund on both sides, including retries and partial failure. Record source/class-hash linkage and unknown deployment gaps.
