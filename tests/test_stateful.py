@@ -147,5 +147,59 @@ class BundleRegistrationTests(unittest.TestCase):
             self.assertTrue((ROOT / "skills/bounty-pilot/references/hunt-agents"
                              / (lens + "-agent.md")).is_file(), lens)
 
+class NativeRoutingAndScaffoldTests(unittest.TestCase):
+    def test_router_separates_native_rust_and_solana_from_manifests(self):
+        routing = load("stack_route")
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp)
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            (repo / "worker").mkdir()
+            (repo / "program").mkdir()
+            (repo / "worker/Cargo.toml").write_text(
+                '[package]\\nname = "worker"\\nversion = "0.1.0"\\n')
+            (repo / "program/Cargo.toml").write_text(
+                '[dependencies]\\nanchor-lang = "0.30"\\n')
+            (repo / "api.py").write_text("def main(): pass\\n")
+            subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+            summary = routing.route(repo)
+            stacks = {x["stack"] for x in summary["stacks"]}
+            self.assertIn("rust-native", stacks)
+            self.assertIn("rust-solana", stacks)
+            self.assertIn("web-backend", stacks)
+            self.assertIn("semantic-mismatch", summary["suggested_cross_stack_lenses"])
+
+    def test_scaffold_is_explicitly_incomplete_and_rejects_empty_findings(self):
+        scaffold = load("poc_scaffold")
+        finding = {"id": "BP-42", "invariant": "one payout per claim",
+                   "entry_point": "deposit", "attacker_capabilities": "public user",
+                   "steps": ["deposit", "cancel", "retry"]}
+        for stack in ("solidity", "rust", "python", "go"):
+            ident, code, data = scaffold.scaffold(finding, stack)
+            self.assertIn("todo", code.lower())
+            self.assertEqual(data["verification"], "not-run-not-proven")
+            self.assertTrue(ident.startswith("bp_"))
+        with self.assertRaises(ValueError):
+            scaffold.scaffold({"id": "../escape"}, "python")
+
+    def test_logic_bundle_includes_native_adapter(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            (repo / "Cargo.toml").write_text(
+                '[package]\\nname = "keeper"\\nversion = "0.1.0"\\n')
+            (repo / "lib.rs").write_text("fn process() { }\\n")
+            subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+            subprocess.run(["git", "-C", str(repo),
+                            "-c", "user.name=Test", "-c", "user.email=a@example.invalid",
+                            "commit", "-qm", "baseline"], check=True)
+            run = root / "private-run"
+            result = bounty.bundle(repo, run, ["business-logic"])
+            text = (run / "bundles/business-logic-bundle.md").read_text()
+            self.assertIn("Native Rust adapter", text)
+            self.assertIn("Stateful, cross-stack search protocol", text)
+            self.assertIn("rust-native", result["detected_stacks_heuristic"])
+
 if __name__ == "__main__":
     unittest.main()
