@@ -1,0 +1,66 @@
+{
+  "actors": [
+    "alice",
+    "bob"
+  ],
+  "state": {
+    "assets": "8",
+    "debt": "8",
+    "credit": "0"
+  },
+  "invariants": [
+    {
+      "id": "solvency",
+      "kind": "compare",
+      "left": {
+        "path": "assets"
+      },
+      "op": "ge",
+      "right": {
+        "path": "debt"
+      },
+      "basis": "synthetic fixture only"
+    }
+  ],
+  "actions": [
+    {
+      "name": "deposit-{actor}",
+      "actor": "*",
+      "effects": [
+        {
+          "op": "add",
+          "path": "assets",
+          "value": "2"
+        },
+        {
+          "op": "add",
+          "path": "credit",
+          "value": "1"
+        }
+      ]
+    },
+    {
+      "name": "redeem-{actor}",
+      "actor": "*",
+      "guards": [
+        {
+          "path": "credit",
+          "op": "ge",
+          "value": "1"
+        }
+      ],
+      "effects": [
+        {
+          "op": "sub",
+          "path": "assets",
+          "value": "2"
+        },
+        {
+          "op": "sub",
+          "path": "credit",
+          "value": "1"
+        }
+      ]
+    }
+  ]
+}

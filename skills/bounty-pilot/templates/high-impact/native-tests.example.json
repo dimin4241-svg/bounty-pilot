@@ -1,0 +1,11 @@
+{
+  "cases": [
+    {
+      "id": "claim",
+      "candidate": "test_claim_attack",
+      "control": "test_claim_control",
+      "cwd": ".",
+      "timeout_sec": 120
+    }
+  ]
+}

@@ -79,6 +79,22 @@ Write one line in `decision_reason` for each. Then read the **missed** list by h
 the heuristic never proposed may still have been found under a very different description. Nothing
 in the harness can catch that for you.
 
+## Comparing 0.8 and 0.9 without cherry-picking
+
+After **separate blind seals and full scoring** for both versions, collect
+the scored outputs as equal-length JSON arrays with the same cases, revision
+and truth. Then run:
+
+```sh
+python3 <skill-dir>/scripts/bench_compare.py \
+  --baseline <private>/baseline-scored.json \
+  --candidate <private>/candidate-scored.json
+```
+
+The helper compares critical/high rediscovered counts and rejects mismatched
+ground truth. It does not establish that sealing was genuinely blind or
+measure cost; you must preserve held-out cases and actual model/time budgets.
+
 ## Reading the result
 
 What the output gives you, and what each number is worth:
