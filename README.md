@@ -25,7 +25,7 @@ Bounty Pilot gives a coding agent a repeatable workflow for **Solidity/EVM audit
 It has two halves, and both decide whether a hunt finds anything:
 
 - A **funnel** that settles where to look and what counts as evidence — which target is worth the week, which code the last audit never saw, which surfaces are already burned by published known issues, and whether the bytecode on chain is the code you are reading.
-- A **hunt** of thirteen aimed lenses, chosen by protocol shape and dispatched from assembled bundles over differentiated passes, where generation and refutation are deliberately separate steps: an agent that refutes itself while hunting finds less, and an agent that never refutes itself files reports that triage kills.
+- A **hunt** of eighteen aimed lenses, chosen by protocol shape and dispatched from assembled bundles over differentiated passes, where generation and refutation are deliberately separate steps: an agent that refutes itself while hunting finds less, and an agent that never refutes itself files reports that triage kills.
 - A **two-round objection exchange** after the hunt, in which a triage agent is told to reject each finding and must anchor every objection in quoted code, quoted specification, a named test or a live chain read — and the answers must be anchored too. Both sides carry the same burden, because a one-round review rejects almost everything and you never learn which rejection was wrong.
 
 **It is an agent skill, not a hosted scanner.** Your agent reads the instructions, inspects the target, runs available tools, and records evidence. The included Python helpers organize results, read live chain state and check structure; they do not discover or prove vulnerabilities by themselves.
