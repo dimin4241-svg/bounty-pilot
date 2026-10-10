@@ -71,11 +71,41 @@ def route(repo):
                "recommended_lenses": LENSES[s]} for s, ev in sorted(matches.items())]
     if len(stacks) > 1:
         warnings.append("Mixed-language/repo detection is not component ownership. Inspect real process and trust boundaries.")
-    return {"schema": 1, "method": "manifest-and-extension-heuristics",
+    report = {"schema": 1, "method": "manifest-and-extension-heuristics",
             "stacks": stacks, "warnings": warnings, "native_execution_verified": False,
             "suggested_cross_stack_lenses": ["semantic-mismatch", "recovery-failure", "composition"]
             if len(stacks) > 1 else [],
             "notice": "Routing only. A file extension does not prove a runtime, deployment or coverage."}
+    report["prioritization"] = prioritize(report)
+    return report
+
+def prioritize(route_report, budget=6):
+    """Rank diverse lenses from *evidence of stack*, never predicted vulnerability odds."""
+    if isinstance(budget, bool) or not isinstance(budget, int) or not 1 <= budget <= 18:
+        raise ValueError("budget must be 1..18")
+    base = {"privileged-path": 6, "coverage-gap": 5, "business-logic": 5,
+            "temporal-logic": 3, "composition": 3, "semantic-mismatch": 2,
+            "recovery-failure": 2, "integration-auth": 2, "accounting": 2,
+            "external-call": 2, "economics": 2, "liveness": 2,
+            "anchor-account": 0, "upgrade": 1, "live-reality": 1,
+            "delta": 1, "upstream-diff": 1, "seam": 1}
+    reasons = {name: ["general baseline"] for name in base}
+    for stack in route_report["stacks"]:
+        for lens in stack["recommended_lenses"]:
+            base[lens] += 5
+            reasons[lens].append("manifest hint: " + stack["stack"])
+    if len(route_report["stacks"]) > 1:
+        for name in ("semantic-mismatch", "recovery-failure", "composition"):
+            base[name] += 4
+            reasons[name].append("multiple language/runtime candidates")
+    # Anchor's account model must never be force-selected on ordinary Rust.
+    if "rust-solana" not in {x["stack"] for x in route_report["stacks"]}:
+        base.pop("anchor-account")
+    ranked = sorted(base, key=lambda name: (-base[name], name))
+    return {"budget": budget, "selected": ranked[:budget],
+            "not_selected": ranked[budget:],
+            "rationale": {x: reasons[x] for x in ranked[:budget]},
+            "disclaimer": "Heuristic reading allocation, not measured bug yield or audited code coverage."}
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)

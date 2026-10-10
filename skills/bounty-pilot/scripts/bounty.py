@@ -1235,11 +1235,13 @@ def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
             chosen.extend(LOGIC_LENSES)
         elif lens == 'cross-stack':
             chosen.extend(CROSS_STACK_LENSES)
+        elif lens == 'recommended':
+            chosen.extend(routed['prioritization']['selected'])
         elif lens in LENSES or lens == TRIAGE:
             chosen.append(lens)
         else:
             raise ValueError(f'unknown lens {lens!r}; choose from ' + ', '.join(LENSES)
-                             + f', {TRIAGE}, or the groups aim / attack / config / logic / cross-stack / all')
+                             + f', {TRIAGE}, or the groups aim / attack / config / logic / cross-stack / recommended / all')
     chosen = list(dict.fromkeys(chosen))
     for lens in chosen:
         source_file = (references / f'{TRIAGE}.md' if lens == TRIAGE
@@ -2419,7 +2421,7 @@ def build_parser():
     bnd.add_argument('--repo', required=True)
     bnd.add_argument('--run', required=True)
     bnd.add_argument('--lens', action='append', required=True,
-                     help='lens name, or a group: aim, attack, config, logic, cross-stack, all. Repeatable.')
+                     help='lens name, or a group: aim, attack, config, logic, cross-stack, recommended, all. Repeatable.')
     bnd.add_argument('--scope', action='append', default=None, help='path prefix to keep')
     bnd.add_argument('--include', action='append', default=None,
                      help='extra context file to append, e.g. a delta ranking. Repeatable.')
