@@ -1,0 +1,14 @@
+{
+  "id": "BP-EXAMPLE",
+  "invariant": "Each settled claim is paid at most once",
+  "entry_point": "claim",
+  "attacker_capabilities": "Unprivileged depositor",
+  "steps": [
+    "Set up an ordinary funded claim",
+    "Execute claim once",
+    "Cancel or retry using normal APIs",
+    "Observe whether the same claim can be settled a second time"
+  ],
+  "source_status": "inferred until checked against protocol specification",
+  "next_experiment": "Create a native runtime test and an unchanged-code negative control"
+}
