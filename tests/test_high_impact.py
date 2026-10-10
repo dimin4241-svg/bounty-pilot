@@ -125,7 +125,7 @@ class SemanticTests(unittest.TestCase):
                                 "calls": []}])
         ranked = impact.rank(graph)
         self.assertIsNone(ranked["ranked"][0]["entry"])
-        self.assertEqual(ranked["ranked"][0]["confidence"], "unverified-static-path")
+        self.assertEqual(ranked["ranked"][0]["confidence"], "unverified-no-public-entry")
         self.assertIn("never severity", ranked["notice"])
 
     def test_bundle_high_impact_and_compiler_plan(self):

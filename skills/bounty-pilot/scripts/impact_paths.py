@@ -28,9 +28,14 @@ def rank(graph, max_depth=5, limit=120):
             continue
         priority = max(CLASS_WEIGHTS.get(x, 0) for x in sink["sinks"])
         queue = deque([(sink["id"], [sink["id"]], [], False)])
-        seen = {sink["id"]}
         candidate = []
+        steps_checked = 0
+        bounded = False
         while queue:
+            steps_checked += 1
+            if steps_checked > 2500:
+                bounded = True
+                break
             cur, path, evidence, uncertain = queue.popleft()
             if symbols[cur].get("entry"):
                 candidate.append({"entry": cur, "path": list(reversed(path)),
@@ -47,6 +52,7 @@ def rank(graph, max_depth=5, limit=120):
                               uncertain_next))
                 # Bound exploration per sink, not just returned top N.
                 if len(queue) > 1000:
+                    bounded = True
                     break
             if len(candidate) >= 20:
                 break
@@ -59,9 +65,10 @@ def rank(graph, max_depth=5, limit=120):
                              "priority_heuristic": priority,
                              "entry": row["entry"], "path": row["path"],
                              "edges": row["edges"],
-                             "confidence": "unverified-possible-sequence"
-                             if row["includes_state_candidate_edge"]
-                             else "unverified-static-path",
+                             "confidence": ("unverified-no-public-entry" if row["entry"] is None
+                                 else "unverified-possible-sequence" if row["includes_state_candidate_edge"]
+                                 else "unverified-static-path"),
+                             "search_truncated": bounded,
                              "todo": ["confirm source revision/deployment",
                                       "confirm public reachability and authority",
                                       "prove violated invariant and third-party loss",

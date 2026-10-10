@@ -61,7 +61,7 @@ def load_solc(path):
     return trees
 
 def solidity_symbols(trees):
-    decls, defs, parent = {}, [], {}
+    decls, parent = {}, {}
     for path, tree in trees:
         for node in walk_json(tree):
             nt = node.get("nodeType")
@@ -69,8 +69,6 @@ def solidity_symbols(trees):
                 ident = node.get("id")
                 if isinstance(ident, int):
                     decls[ident] = str(path) + ":" + str(node.get("name", ident))
-            if nt == "FunctionDefinition":
-                defs.append((path, node, parent.get(node.get("id"), "")))
             if nt == "ContractDefinition":
                 cname = node.get("name", "")
                 for child in node.get("nodes", []):
@@ -90,7 +88,10 @@ def solidity_symbols(trees):
                           "declaration": num, "language": "solidity",
                           "entry": node.get("visibility") in ("external", "public"),
                           "visibility": node.get("visibility", "unknown"),
-                          "line": None, "writes": [], "reads": [],
+                          "line": None, "source_span": node.get("src"),
+                          "modifiers_unverified": [str((m.get("modifierName") or {}).get("name", "unknown"))
+                              for m in node.get("modifiers", []) if isinstance(m, dict)],
+                          "writes": [], "reads": [],
                           "calls": [], "sinks": [], "source": "compiler-ast"}
     for path, tree in trees:
         for node in walk_json(tree):
@@ -120,6 +121,10 @@ def solidity_symbols(trees):
                             writes.add(decls[lhs["referencedDeclaration"]])
                 if nt == "FunctionCall":
                     expression = x.get("expression") or {}
+                    if expression.get("nodeType") == "MemberAccess" and expression.get("memberName") in ("push", "pop"):
+                        for ref in walk_json(expression.get("expression")):
+                            if ref.get("referencedDeclaration") in decls:
+                                writes.add(decls[ref["referencedDeclaration"]])
                     target = expression.get("referencedDeclaration")
                     if target in funcs:
                         calls.add(funcs[target]["id"])
@@ -154,7 +159,7 @@ def py_symbols(root):
     defs = []
     files = [x for x in tracked if x.endswith(".py") and
              not set(Path(x).parts).intersection(
-                 {"test", "tests", "vendor", "node_modules", "build", "dist", ".git"})]
+                 {"test", "tests", "vendor", "node_modules", "build", "dist", ".git", "secrets", "credentials", ".env"})]
     if len(files) > 2000:
         raise ValueError("too many Python files; narrow repository")
     for path in sorted(files):
