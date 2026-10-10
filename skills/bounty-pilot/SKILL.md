@@ -101,6 +101,7 @@ with the source or specification that evidences each. Label inferred invariants 
 private run, not the target checkout:
 
 ```sh
+python3 <skill-dir>/scripts/stack_route.py --repo <checkout> --out <run>/stack-route.json
 python3 <skill-dir>/scripts/state_graph.py --repo <checkout> --out <run>/state-graph.json
 python3 <skill-dir>/scripts/coverage_graph.py --graph <run>/state-graph.json --out <run>/coverage-priority.json
 ```
@@ -211,6 +212,18 @@ For each survivor, build a minimal PoC from `templates/` against **unmodified** 
 pinned to a recorded block or a reproducible local deployment. Capture the command, tool versions,
 exit code, full log, assertions, initial and final state, and a negative control. Add a
 minimal-fix regression where feasible.
+
+**Optional native PoC scaffolding:** Generate deliberately failing candidate and control
+test skeletons for Solidity, native Rust, Python or Go from a source-anchored hypothesis:
+
+```sh
+python3 <skill-dir>/scripts/poc_scaffold.py --finding <run>/hypothesis.json \
+  --stack rust --out-dir <run>/poc
+```
+
+Move, Cairo, CosmWasm and other ecosystems require native harnesses instead of
+pretending a generic Rust/Solidity test applies. Skeletons are never exploit evidence:
+fill realistic setup, reachable actions and both assertions first. Examples in `templates/stateful/`.
 
 **Optional data-only consistency checks and paired test execution:** define explicit, provenance-
 labelled predicates over captured JSON snapshots, then invoke:

@@ -286,13 +286,15 @@ python3 -m unittest discover -s tests -v
 
 ```bash
 S=skills/bounty-pilot/scripts
+python3 $S/stack_route.py --repo /путь/к/проекту --out /путь/к/приватному/run/stack-route.json
 python3 $S/state_graph.py --repo /путь/к/проекту --out /путь/к/приватному/run/state-graph.json
 python3 $S/coverage_graph.py --graph /путь/к/приватному/run/state-graph.json
 python3 $S/bounty.py bundle --repo /путь/к/проекту --run /путь/к/приватному/run --lens logic
 python3 $S/bounty.py bundle --repo /путь/к/проекту --run /путь/к/приватному/run --lens cross-stack
+python3 $S/poc_scaffold.py --finding hypothesis.json --stack rust --out-dir /путь/к/приватному/run/poc
 python3 $S/invariant_check.py --spec invariants.json --snapshot snapshot.json
 python3 $S/scenario_runner.py --plan test-plan.json --repo /путь/к/изолированной/копии
 # --allow-exec: только после отдельной проверки команд в изолированной среде без ключей.
 ```
 
-Граф — эвристическая подсказка, а не доказательство исполнимости. Проверка JSON-инвариантов не доказывает возможность получить такое состояние. Прогон команд требует плана с гипотезой и отрицательным контролем; успешные команды сами по себе **не подтверждают уязвимость**. Полный процесс: [stateful-search.md](skills/bounty-pilot/references/stateful-search.md).
+Граф — эвристическая подсказка, а не доказательство исполнимости. Проверка JSON-инвариантов не доказывает возможность получить такое состояние. Прогон команд требует плана с гипотезой и отрицательным контролем; успешные команды сами по себе **не подтверждают уязвимость**. Полный процесс: [stateful-search.md](skills/bounty-pilot/references/stateful-search.md). [Примеры входных файлов](skills/bounty-pilot/templates/stateful/). PoC-шаблоны заведомо не проходят тесты, пока в них не добавлены настоящие проверки.

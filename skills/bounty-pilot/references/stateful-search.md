@@ -18,6 +18,8 @@ For each scenario state:
 - the one experiment that confirms or kills the mechanism.
 
 ## Tools and evidence
+`stack_route.py` proposes native runtime adapters from tracked manifests; it does not prove deployment.
+`poc_scaffold.py` emits deliberately failing test skeletons with candidate and control cases for Solidity, Rust, Python and Go; it cannot generate a valid exploit from metadata alone.
 `state_graph.py` performs a lightweight heuristic symbol inventory; it **does not** derive a sound call graph, control flow or runtime reachability. `coverage_graph.py` ranks gaps over that inventory, not full semantic coverage.
 `invariant_check.py` evaluates explicit arithmetic/equality predicates against user-provided JSON snapshots; these snapshots are not live state and cannot prove reachability.
 `scenario_runner.py` runs an **explicitly approved** test command in a hermetic checkout and saves bounded logs, exit code and controls; it does not generate exploits or claim a failing assertion proves the protocol vulnerable.

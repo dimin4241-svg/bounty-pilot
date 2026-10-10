@@ -8,6 +8,10 @@ pass across their trust boundary.
 
 ## Native adapter procedures
 
+Start with `python3 <skill-dir>/scripts/stack_route.py --repo <checkout>` to generate a
+conservative manifest-based shortlist, then confirm the real runtime. `bounty.py route --repo
+<checkout>` prints the same data. Logic bundles include detected adapter instructions.
+
 Read the matching files in `adapters/`: `rust-native.md`, `rust-solana.md`,
 `rust-cosmwasm.md`, `move.md`, `cairo.md`, `go.md`, or `web-backend.md`.
 Do this **in addition to** the basic workflow, not instead of scope, evidence and triage.
