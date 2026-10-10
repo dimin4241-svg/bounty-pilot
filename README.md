@@ -117,6 +117,7 @@ S=skills/bounty-pilot/scripts
 python3 $S/stack_route.py --repo /path/to/target --out private/run/stack-route.json
 python3 $S/state_graph.py --repo /path/to/target --out private/run/state-graph.json
 python3 $S/coverage_graph.py --graph private/run/state-graph.json --out private/run/coverage-priority.json
+python3 $S/bounty.py bundle --repo /path/to/target --run private/run --lens recommended
 python3 $S/bounty.py bundle --repo /path/to/target --run private/run --lens logic --scope src/
 python3 $S/bounty.py bundle --repo /path/to/target --run private/run --lens cross-stack
 python3 $S/poc_scaffold.py --finding private/run/hypothesis.json --stack rust --out-dir private/run/poc
@@ -125,7 +126,7 @@ python3 $S/scenario_runner.py --repo /path/to/disposable-target --plan private/r
 # --allow-exec only for a reviewed, sandboxed, secret-free local test plan.
 ```
 
-The state graph is an **approximate lexical inventory**, not dataflow analysis. Snapshot checks establish arithmetic consistency, **not** reachability. The scenario runner requires candidate and negative-control commands for each pair, executes nothing by default, and reports command outcomes rather than asserting exploit validity. See [stateful-search.md](skills/bounty-pilot/references/stateful-search.md) for the protocol and [example inputs](skills/bounty-pilot/templates/stateful/). Native PoC scaffolds deliberately fail until implemented.
+The `recommended` bundle group ranks a limited set of lenses from manifest hints (default six), not measured vulnerability likelihood. The state graph is an **approximate lexical inventory**, not dataflow analysis. Snapshot checks establish arithmetic consistency, **not** reachability. The scenario runner requires candidate and negative-control commands for each pair, executes nothing by default, and reports command outcomes rather than asserting exploit validity. See [stateful-search.md](skills/bounty-pilot/references/stateful-search.md) for the protocol and [example inputs](skills/bounty-pilot/templates/stateful/). Native PoC scaffolds deliberately fail until implemented.
 
 ### The hunt lenses
 

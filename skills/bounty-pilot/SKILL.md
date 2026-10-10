@@ -149,6 +149,11 @@ highest-yield mechanism lenses) and `config` (`live-reality`, `upgrade`); add `-
 for Solana or Rust. Where budget allows, dispatch each mechanism lens **twice in independent
 contexts** — the cheapest recall increase available.
 
+**Budgeted lens selection:** `bundle --lens recommended` selects up to six prioritized
+lenses using *manifest hints* from `stack_route.py`; this is a starting shortlist,
+not evidence of actual security coverage or measured bug yield. Record missing but
+applicable lenses in `coverage.md`, and override with explicit `--lens` when needed.
+
 **New, independent logic lenses.** Select `--lens logic` when multiple actions can change the
 same asset, privilege, reward or epoch, and `--lens cross-stack` when a keeper, relayer, signer,
 API or watcher shares a trust boundary with on-chain code. These groups produce distinct bundles

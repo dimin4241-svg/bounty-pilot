@@ -289,6 +289,7 @@ S=skills/bounty-pilot/scripts
 python3 $S/stack_route.py --repo /путь/к/проекту --out /путь/к/приватному/run/stack-route.json
 python3 $S/state_graph.py --repo /путь/к/проекту --out /путь/к/приватному/run/state-graph.json
 python3 $S/coverage_graph.py --graph /путь/к/приватному/run/state-graph.json
+python3 $S/bounty.py bundle --repo /путь/к/проекту --run /путь/к/приватному/run --lens recommended
 python3 $S/bounty.py bundle --repo /путь/к/проекту --run /путь/к/приватному/run --lens logic
 python3 $S/bounty.py bundle --repo /путь/к/проекту --run /путь/к/приватному/run --lens cross-stack
 python3 $S/poc_scaffold.py --finding hypothesis.json --stack rust --out-dir /путь/к/приватному/run/poc

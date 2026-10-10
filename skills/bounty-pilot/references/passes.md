@@ -84,6 +84,15 @@ output, plus the `seam` lens over both passes' records.
 > agreement. Repeated contexts cost real budget and may be correlated. State the readings that ran
 > and what unique coverage each added.
 
+## Adaptive reading budget
+
+Use `python3 <skill-dir>/scripts/stack_route.py --repo <checkout>` to produce a conservative
+runtime inventory and a six-lens shortlist, or `bounty.py bundle --lens recommended` for
+bundled independent contexts. The priority is an unvalidated heuristic based on manifests,
+not the probability of real vulnerabilities. Track unique surfaces and mechanisms after
+passes; stop duplicating a lens if its new coverage is zero. Override automatically chosen
+lenses when target facts warrant it, and document omitted necessary analyses.
+
 ## Independent stateful logic discovery
 
 Use `--lens logic` for `business-logic`, `temporal-logic`, and `composition`.

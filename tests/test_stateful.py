@@ -167,6 +167,12 @@ class NativeRoutingAndScaffoldTests(unittest.TestCase):
             self.assertIn("rust-solana", stacks)
             self.assertIn("web-backend", stacks)
             self.assertIn("semantic-mismatch", summary["suggested_cross_stack_lenses"])
+            self.assertEqual(len(summary["prioritization"]["selected"]), 6)
+            limited = routing.prioritize(summary, budget=3)
+            self.assertEqual(len(limited["selected"]), 3)
+            self.assertNotIn("anchor-account", routing.prioritize({"stacks": []})["selected"])
+            with self.assertRaises(ValueError):
+                routing.prioritize(summary, 0)
 
     def test_scaffold_is_explicitly_incomplete_and_rejects_empty_findings(self):
         scaffold = load("poc_scaffold")
@@ -200,6 +206,9 @@ class NativeRoutingAndScaffoldTests(unittest.TestCase):
             self.assertIn("Native Rust adapter", text)
             self.assertIn("Stateful, cross-stack search protocol", text)
             self.assertIn("rust-native", result["detected_stacks_heuristic"])
+            targeted = bounty.bundle(repo, run, ["recommended"])
+            self.assertEqual(len(targeted["bundles"]), 6)
+            self.assertTrue(any(x["lens"] == "business-logic" for x in targeted["bundles"]))
 
 if __name__ == "__main__":
     unittest.main()
