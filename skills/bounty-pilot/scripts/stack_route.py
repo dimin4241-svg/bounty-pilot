@@ -16,9 +16,9 @@ ADAPTERS = {
     "web-backend": "adapters/web-backend.md",
 }
 LENSES = {
-    "solidity-evm": ["privileged-path", "accounting", "business-logic", "temporal-logic"],
-    "rust-native": ["recovery-failure", "semantic-mismatch", "business-logic"],
-    "rust-solana": ["anchor-account", "privileged-path", "business-logic", "temporal-logic"],
+    "solidity-evm": ["impact-first", "privileged-path", "accounting", "business-logic", "temporal-logic"],
+    "rust-native": ["impact-first", "recovery-failure", "semantic-mismatch", "business-logic"],
+    "rust-solana": ["impact-first", "anchor-account", "privileged-path", "business-logic", "temporal-logic"],
     "rust-cosmwasm": ["business-logic", "temporal-logic", "integration-auth"],
     "move": ["privileged-path", "business-logic", "temporal-logic"],
     "cairo-starknet": ["privileged-path", "business-logic", "temporal-logic"],
@@ -81,9 +81,9 @@ def route(repo):
 
 def prioritize(route_report, budget=6):
     """Rank diverse lenses from *evidence of stack*, never predicted vulnerability odds."""
-    if isinstance(budget, bool) or not isinstance(budget, int) or not 1 <= budget <= 18:
-        raise ValueError("budget must be 1..18")
-    base = {"privileged-path": 6, "coverage-gap": 5, "business-logic": 5,
+    if isinstance(budget, bool) or not isinstance(budget, int) or not 1 <= budget <= 19:
+        raise ValueError("budget must be 1..19")
+    base = {"impact-first": 8, "privileged-path": 6, "coverage-gap": 5, "business-logic": 5,
             "temporal-logic": 3, "composition": 3, "semantic-mismatch": 2,
             "recovery-failure": 2, "integration-auth": 2, "accounting": 2,
             "external-call": 2, "economics": 2, "liveness": 2,
