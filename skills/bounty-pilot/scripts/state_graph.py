@@ -67,6 +67,8 @@ def _safe_path(root, relative):
     return path.is_file() and path.stat().st_size <= 250_000
 
 def scan(root, limit=600):
+    if not isinstance(limit, int) or not 1 <= limit <= 5000:
+        raise ValueError('symbol limit must be between 1 and 5000')
     root = Path(root).resolve()
     files = [p for p in _tracked(root) if _safe_path(root, p)]
     symbols, omitted = [], []
