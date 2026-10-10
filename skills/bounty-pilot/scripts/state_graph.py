@@ -39,6 +39,7 @@ GENERAL_PATTERN = r"\b(?:fn|function|def|fun)\s+([A-Za-z_]\w*)\s*\("
 IDENT = re.compile(r"\b[A-Za-z_]\w*\b")
 QUALIFIED_WRITE = re.compile(
     r"\b(?:self|this|storage|state|ctx|account|accounts)\.([A-Za-z_]\w*)\s*(?:\+=|-=|=(?!=)|\.set\b|\.write\b)")
+INDEXED_WRITE = re.compile(r"\b([A-Za-z_]\w*)\s*\[[^\]\n]{1,120}\]\s*(?:\+=|-=|=(?!=))")
 ASSIGN = re.compile(r"\b([A-Za-z_]\w*)\s*(?:\+=|-=|=(?!=))")
 IGNORE = {"self", "this", "return", "require", "assert", "let", "mut", "var",
           "const", "true", "false", "None", "Some", "Ok", "Err", "result",
@@ -88,7 +89,7 @@ def scan(root, limit=600):
             stop = found[index + 1].start() if index + 1 < len(found) else len(content)
             body = content[match.start():min(stop, match.start() + 12000)]
             words = set(IDENT.findall(body))
-            writes = set(QUALIFIED_WRITE.findall(body))
+            writes = set(QUALIFIED_WRITE.findall(body)) | set(INDEXED_WRITE.findall(body))
             # Raw assignment is intentionally excluded from graph edges: a local variable
             # named 'balance' must not be mistaken for a write to protocol state.
             local_writes = set(ASSIGN.findall(body))
@@ -104,7 +105,7 @@ def scan(root, limit=600):
                 "local_assignments_not_state": sorted(local_writes)[:50],
                 "signals": markers,
             })
-    # Only propose edges supported by an explicit qualified write on one side.
+    # Proposed write/read and lexical call edges are low-confidence hints only.
     # Other protocols need AST- and runtime-specific analysis to establish the edge.
     reverse = {}
     for symbol in symbols:
@@ -117,7 +118,7 @@ def scan(root, limit=600):
                 if src["id"] == dst["id"]:
                     continue
                 edges.append({"from": src["id"], "to": dst["id"],
-                              "reason": "qualified-write / lexical-read overlap",
+                              "reason": "qualified-or-indexed-write / lexical-read overlap",
                               "token": token, "confidence": "low"})
                 if len(edges) >= 3000:
                     break
@@ -125,6 +126,14 @@ def scan(root, limit=600):
                 break
         if len(edges) >= 3000:
             break
+    for src in symbols:
+        for dst in symbols:
+            if len(edges) >= 3000:
+                break
+            if src["id"] != dst["id"] and dst["symbol"] in src["reads_approx"]:
+                edges.append({"from": src["id"], "to": dst["id"],
+                              "reason": "lexical-symbol-name overlap (possible call)",
+                              "token": dst["symbol"], "confidence": "low"})
     sequences = [{"actions": [e["from"], e["to"]], "shared_token": e["token"],
                   "status": "unverified-seed"} for e in edges[:150]]
     return {
