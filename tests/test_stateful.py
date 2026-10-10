@@ -156,10 +156,10 @@ class NativeRoutingAndScaffoldTests(unittest.TestCase):
             (repo / "worker").mkdir()
             (repo / "program").mkdir()
             (repo / "worker/Cargo.toml").write_text(
-                '[package]\\nname = "worker"\\nversion = "0.1.0"\\n')
+                '[package]\nname = "worker"\nversion = "0.1.0"\n')
             (repo / "program/Cargo.toml").write_text(
-                '[dependencies]\\nanchor-lang = "0.30"\\n')
-            (repo / "api.py").write_text("def main(): pass\\n")
+                '[dependencies]\nanchor-lang = "0.30"\n')
+            (repo / "api.py").write_text("def main(): pass\n")
             subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
             summary = routing.route(repo)
             stacks = {x["stack"] for x in summary["stacks"]}
@@ -188,8 +188,8 @@ class NativeRoutingAndScaffoldTests(unittest.TestCase):
             repo.mkdir()
             subprocess.run(["git", "init", "-q", str(repo)], check=True)
             (repo / "Cargo.toml").write_text(
-                '[package]\\nname = "keeper"\\nversion = "0.1.0"\\n')
-            (repo / "lib.rs").write_text("fn process() { }\\n")
+                '[package]\nname = "keeper"\nversion = "0.1.0"\n')
+            (repo / "lib.rs").write_text("fn process() { }\n")
             subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
             subprocess.run(["git", "-C", str(repo),
                             "-c", "user.name=Test", "-c", "user.email=a@example.invalid",
