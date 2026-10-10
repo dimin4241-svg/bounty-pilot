@@ -100,6 +100,31 @@ Alternatively, copy `skills/bounty-pilot` into your agent's supported skills dir
 | 6. Novelty | Has someone already published this? | Cited sources, duplicate collisions |
 | 7. Deliver | What can we substantiate? | Private draft, limitations, next experiment |
 
+### Stateful, cross-stack logic hunting (0.8)
+
+Five additional *independent* discovery lenses focus on bugs that do not fit a named Solidity pattern:
+
+- `business-logic` reconstructs end-to-end promises and violations across multiple actions.
+- `temporal-logic` examines ordering, epoch boundaries, stale rights and lifecycle transitions.
+- `composition` derives multi-action candidates from source even when earlier lenses found nothing.
+- `semantic-mismatch` compares signing, identity, serialization and numeric meanings across runtimes.
+- `recovery-failure` examines durable acknowledgement, retries, crash loops and shared liveness.
+
+Native adapters cover regular Rust, Solana/Anchor, CosmWasm, Move (Aptos/Sui distinguished), Cairo/Starknet, Go and web backends. These are **procedures**, not a claim of complete engine-level support.
+
+```sh
+S=skills/bounty-pilot/scripts
+python3 $S/state_graph.py --repo /path/to/target --out private/run/state-graph.json
+python3 $S/coverage_graph.py --graph private/run/state-graph.json --out private/run/coverage-priority.json
+python3 $S/bounty.py bundle --repo /path/to/target --run private/run --lens logic --scope src/
+python3 $S/bounty.py bundle --repo /path/to/target --run private/run --lens cross-stack
+python3 $S/invariant_check.py --spec private/run/invariants.json --snapshot private/run/snapshot.json
+python3 $S/scenario_runner.py --repo /path/to/disposable-target --plan private/run/test-plan.json
+# --allow-exec only for a reviewed, sandboxed, secret-free local test plan.
+```
+
+The state graph is an **approximate lexical inventory**, not dataflow analysis. Snapshot checks establish arithmetic consistency, **not** reachability. The scenario runner requires candidate and negative-control commands for each pair, executes nothing by default, and reports command outcomes rather than asserting exploit validity. See [stateful-search.md](skills/bounty-pilot/references/stateful-search.md) for the protocol.
+
 ### The hunt lenses
 
 | Lens | Axis it attacks |
@@ -117,6 +142,11 @@ Alternatively, copy `skills/bounty-pilot` into your agent's supported skills dir
 | `liveness` | **Persistence** — cheap, unprivileged, irreversible denial |
 | `anchor-account` | **Solana** — account substitution, PDA seeds, CPI authority |
 | `seam` | **Combinations** — mechanisms no single lens can see, and refusals worth overturning |
+| `business-logic` | **Intent** — states violating the user's actual protocol promise |
+| `temporal-logic` | **Order** — multi-step traces, epochs and stale rights |
+| `composition` | **Independent composition** — source-derived multi-action sequences |
+| `semantic-mismatch` | **Cross-runtime meaning** — signed intent, serialization and identity disagreement |
+| `recovery-failure` | **Recovery** — durable state, retries, poison queues, crashes |
 
 Passes differ by **what they aim at**, not by effort. Aiming is cheap and mechanical — diffs, manifests and test files — and produces a ranked reading order, not findings. The attack passes then run the mechanism lenses against that ranking, each from an assembled bundle holding the reading SOP, the shared rules, that lens's procedure, the run context and all in-scope source:
 
@@ -129,7 +159,7 @@ One bundle per lens, one agent per bundle, each in its own context. Recall is dr
 
 The default budget is **up to three stages**, roughly 18 readings plus triage. It stops at the budget, or after two consecutive passes yield neither a new mechanism nor new coverage. There is no infinite loop and no finding quota — zero verified findings after an honest run is a legitimate result.
 
-Thirteen lenses are not thirteen passes: [`passes.md`](skills/bounty-pilot/references/passes.md) has a selection table by protocol shape (lending, AMM, vault, bridge, router, staking, perps, governance, fork, upgradeable, Solana). Two run on nearly everything — `privileged-path`, because access control and initialization are the categories automated reviewers measurably miss most and the largest real losses came from them, and `coverage-gap`, because the tests record what the authors never checked.
+Eighteen lenses are not eighteen passes: [`passes.md`](skills/bounty-pilot/references/passes.md) has a selection table by protocol shape (lending, AMM, vault, bridge, router, staking, perps, governance, fork, upgradeable, Solana). Two run on nearly everything — `privileged-path`, because access control and initialization are the categories automated reviewers measurably miss most and the largest real losses came from them, and `coverage-gap`, because the tests record what the authors never checked.
 
 ### Severity is the payout
 

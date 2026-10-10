@@ -46,3 +46,6 @@ Skill entry point: `skills/bounty-pilot/SKILL.md`.
 Run tests: `python3 -m unittest discover -s tests -v`.
 Bump `VERSION` and `skills/bounty-pilot/VERSION` together; `.claude-plugin/plugin.json` carries the
 same number.
+
+- **Stateful helper evidence levels stay explicit.** `state_graph.py` is only a lexical heuristic; `invariant_check.py` tests supplied JSON snapshots; `scenario_runner.py` is dry-run unless execution is explicitly allowed. Never call any of those outcomes verified exploits. Both candidate and negative-control cases are mandatory for execution plans.
+- **Cross-stack runtime semantics must be native.** Rust workers are not Solana programs; Sui is not Aptos; on-chain atomic failure is not off-chain crash persistence. Each added lens must have an instruction file and tests must cover it.

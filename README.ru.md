@@ -279,3 +279,20 @@ python3 -m unittest discover -s tests -v
 Исследуй только разрешённые цели и соблюдай правила программы. Проверяй PoC локально, без секретов и отправки атакующих транзакций в рабочую сеть. Полнота аудита, оригинальность находок и принятие репортов не гарантируются.
 
 Оригинальные материалы распространяются по **[MIT](LICENSE)**. У сторонних проектов свои лицензии; их участие или одобрение не подразумевается. [Источники и благодарности](SOURCES.md).
+
+## Многошаговые логические уязвимости и другие языки (0.8)
+
+Добавлены пять независимых линз: `business-logic` (нестандартная бизнес-логика), `temporal-logic` (порядок операций и эпохи), `composition` (несколько безопасных действий образуют проблему), `semantic-mismatch` (разные значения одного поля в контракте, RPC и backend), `recovery-failure` (повторы, перезапуски, потеря подтверждения, poison queue). Адаптеры: обычный Rust, Solana, CosmWasm, Move, Cairo, Go, TypeScript/Python.
+
+```bash
+S=skills/bounty-pilot/scripts
+python3 $S/state_graph.py --repo /путь/к/проекту --out /путь/к/приватному/run/state-graph.json
+python3 $S/coverage_graph.py --graph /путь/к/приватному/run/state-graph.json
+python3 $S/bounty.py bundle --repo /путь/к/проекту --run /путь/к/приватному/run --lens logic
+python3 $S/bounty.py bundle --repo /путь/к/проекту --run /путь/к/приватному/run --lens cross-stack
+python3 $S/invariant_check.py --spec invariants.json --snapshot snapshot.json
+python3 $S/scenario_runner.py --plan test-plan.json --repo /путь/к/изолированной/копии
+# --allow-exec: только после отдельной проверки команд в изолированной среде без ключей.
+```
+
+Граф — эвристическая подсказка, а не доказательство исполнимости. Проверка JSON-инвариантов не доказывает возможность получить такое состояние. Прогон команд требует плана с гипотезой и отрицательным контролем; успешные команды сами по себе **не подтверждают уязвимость**. Полный процесс: [stateful-search.md](skills/bounty-pilot/references/stateful-search.md).
