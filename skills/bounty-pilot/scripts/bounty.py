@@ -78,6 +78,39 @@ def load_stack_route():
     return module
 
 
+def load_impact_helper(name):
+    """Load bundled AST/impact helpers without depending on PYTHONPATH."""
+    path = Path(__file__).resolve().parent / (name + '.py')
+    spec = importlib.util.spec_from_file_location('bp_' + name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def impact_plan(repo=None, solc=None, out=None):
+    """Create non-proving source graph and backwards risk queue for a pinned checkout."""
+    if not repo and not solc:
+        raise ValueError('impact-plan needs --repo and/or --solc')
+    if not out:
+        raise ValueError('impact-plan needs --out private run directory')
+    target = Path(out).resolve()
+    target.mkdir(parents=True, exist_ok=True)
+    parsed = load_impact_helper('semantic_graph')
+    symbols = []
+    if solc:
+        symbols.extend(parsed.solidity_symbols(parsed.load_solc(solc)))
+    if repo:
+        symbols.extend(parsed.py_symbols(repo))
+    graph = parsed.build(symbols)
+    paths = load_impact_helper('impact_paths').rank(graph)
+    dump(target / 'semantic-graph.json', graph)
+    dump(target / 'impact-paths.json', paths)
+    return {'graph': str(target / 'semantic-graph.json'),
+            'impact_paths': str(target / 'impact-paths.json'),
+            'symbols': len(graph['symbols']), 'paths': len(paths['ranked']),
+            'notice': 'Prioritization only: graph edges and impact labels do not prove an exploit.'}
+
+
 def load_keccak():
     path = Path(__file__).resolve().parent / 'keccak.py'
     spec = importlib.util.spec_from_file_location('bp_keccak', path)
@@ -1018,7 +1051,8 @@ def delta(repo, since, scope_prefixes=None, limit=40):
 LENSES = ('delta', 'upstream-diff', 'coverage-gap', 'privileged-path', 'accounting',
           'integration-auth', 'external-call', 'economics', 'liveness', 'upgrade',
           'live-reality', 'anchor-account', 'seam', 'business-logic',
-          'temporal-logic', 'recovery-failure', 'semantic-mismatch', 'composition')
+          'temporal-logic', 'recovery-failure', 'semantic-mismatch', 'composition',
+          'impact-first')
 TRIAGE = 'triage'
 AIM_LENSES = ('delta', 'upstream-diff', 'coverage-gap')
 # The six highest-yield mechanism lenses. privileged-path leads because access control and
@@ -1029,6 +1063,8 @@ ATTACK_LENSES = ('privileged-path', 'accounting', 'integration-auth', 'external-
 CONFIG_LENSES = ('live-reality', 'upgrade')
 LOGIC_LENSES = ('business-logic', 'temporal-logic', 'composition')
 CROSS_STACK_LENSES = ('semantic-mismatch', 'recovery-failure')
+HIGH_IMPACT_LENSES = ('impact-first', 'privileged-path', 'business-logic',
+                      'economics', 'composition')
 BUNDLE_WARN_BYTES = 400_000
 
 BUNDLE_HEADER = """# Hunt bundle: {lens}
@@ -1237,11 +1273,13 @@ def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
             chosen.extend(CROSS_STACK_LENSES)
         elif lens == 'recommended':
             chosen.extend(routed['prioritization']['selected'])
+        elif lens == 'high-impact':
+            chosen.extend(HIGH_IMPACT_LENSES)
         elif lens in LENSES or lens == TRIAGE:
             chosen.append(lens)
         else:
             raise ValueError(f'unknown lens {lens!r}; choose from ' + ', '.join(LENSES)
-                             + f', {TRIAGE}, or the groups aim / attack / config / logic / cross-stack / recommended / all')
+                             + f', {TRIAGE}, or the groups aim / attack / config / logic / cross-stack / high-impact / recommended / all')
     chosen = list(dict.fromkeys(chosen))
     for lens in chosen:
         source_file = (references / f'{TRIAGE}.md' if lens == TRIAGE
@@ -1340,10 +1378,14 @@ def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
         if sop:
             pieces.append(sop)
         pieces += [shared, lens_text]
-        if lens in LOGIC_LENSES + CROSS_STACK_LENSES + ('anchor-account',):
+        if lens in LOGIC_LENSES + CROSS_STACK_LENSES + ('anchor-account', 'impact-first'):
             guide = references / 'stateful-search.md'
             if guide.is_file():
                 pieces.append(guide.read_text(encoding='utf-8'))
+            if lens == 'impact-first':
+                extra = references / 'impact-first.md'
+                if extra.is_file():
+                    pieces.append(extra.read_text(encoding='utf-8'))
             for selected_stack in routed['stacks']:
                 adapter = references / selected_stack['adapter']
                 if adapter.is_file():
@@ -2421,10 +2463,15 @@ def build_parser():
     bnd.add_argument('--repo', required=True)
     bnd.add_argument('--run', required=True)
     bnd.add_argument('--lens', action='append', required=True,
-                     help='lens name, or a group: aim, attack, config, logic, cross-stack, recommended, all. Repeatable.')
+                     help='lens name, or a group: aim, attack, config, logic, cross-stack, high-impact, recommended, all. Repeatable.')
     bnd.add_argument('--scope', action='append', default=None, help='path prefix to keep')
     bnd.add_argument('--include', action='append', default=None,
                      help='extra context file to append, e.g. a delta ranking. Repeatable.')
+
+    impact_parser = sub.add_parser('impact-plan', help='build compiler-aware impact-first queue (not a PoC)')
+    impact_parser.add_argument('--repo', default=None, help='optional tracked Python checkout')
+    impact_parser.add_argument('--solc', default=None, help='optional Solidity compiler AST/build-info JSON')
+    impact_parser.add_argument('--out', required=True, help='private run directory for graph and ranked paths')
 
     route_parser = sub.add_parser('route', help='recommend native adapters from tracked manifests (heuristic)')
     route_parser.add_argument('--repo', required=True)
@@ -2527,6 +2574,9 @@ def main(argv=None):
         if args.action == 'bundle':
             print(json.dumps(bundle(args.repo, args.run, args.lens, args.scope,
                                     args.include), indent=2))
+            return 0
+        if args.action == 'impact-plan':
+            print(json.dumps(impact_plan(args.repo, args.solc, args.out), indent=2))
             return 0
         if args.action == 'route':
             print(json.dumps(load_stack_route().route(args.repo), indent=2))

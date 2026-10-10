@@ -280,6 +280,28 @@ python3 -m unittest discover -s tests -v
 
 Оригинальные материалы распространяются по **[MIT](LICENSE)**. У сторонних проектов свои лицензии; их участие или одобрение не подразумевается. [Источники и благодарности](SOURCES.md).
 
+## Bounty Pilot 0.9 — поиск от High/Critical-последствий
+
+Добавлен агент `impact-first`, который начинает с денег, долгов, прав и
+расчётов по сообщениям. Для Solidity используется AST компилятора, для
+Python — встроенный AST. Для Rust, Move, Cairo и других языков
+сохраняются существующие нативные адаптеры без ложного обещания
+компиляторного семантического анализа.
+
+```bash
+S=skills/bounty-pilot/scripts
+python3 $S/bounty.py impact-plan --solc /путь/build-info.json --out /путь/private-run
+python3 $S/bounty.py bundle --repo /путь/к/проекту --run /путь/private-run --lens high-impact
+python3 $S/scenario_fuzz.py --model model.json --control control.json --depth 5
+python3 $S/impact_feasibility.py --case impact-case.json
+```
+
+Также добавлены генератор парных команд Foundry/Cargo/pytest/Go и
+сравнение результатов исторических слепых тестов. Нарушение инварианта
+в вручную заданной модели **не равно** доказанной уязвимости.
+Проверка суммы ущерба не устанавливает severity. Примеры:
+[templates/high-impact](skills/bounty-pilot/templates/high-impact/).
+
 ## Многошаговые логические уязвимости и другие языки (0.8)
 
 Добавлены пять независимых линз: `business-logic` (нестандартная бизнес-логика), `temporal-logic` (порядок операций и эпохи), `composition` (несколько безопасных действий образуют проблему), `semantic-mismatch` (разные значения одного поля в контракте, RPC и backend), `recovery-failure` (повторы, перезапуски, потеря подтверждения, poison queue). Адаптеры: обычный Rust, Solana, CosmWasm, Move, Cairo, Go, TypeScript/Python.

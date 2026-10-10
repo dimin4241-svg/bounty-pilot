@@ -96,7 +96,16 @@ stack has no dedicated lens, say so in `coverage.md` and do not translate EVM as
 Write `model.md`: state transitions, external assumptions, operational dependencies, and invariants
 with the source or specification that evidences each. Label inferred invariants as inferred.
 
-**Cross-stack state inventory (new):** read `references/stateful-search.md`, then build a bounded,
+**High-impact AST analysis (0.9):** run
+`bounty.py impact-plan --solc <compiler-output.json> --out <private-run>` for
+the exact pinned Solidity compiler output (with `sources.*.ast`). Python
+sources can be analyzed via `--repo <checkout>`. It writes
+`semantic-graph.json` and `impact-paths.json`. Static references do not
+prove runtime reachability or access control; state overlap is a candidate
+sequence only. Rust/Move/Cairo need native-specific tools, not EVM AST
+assumptions. Read `references/impact-first.md`.
+
+**Cross-stack state inventory (0.8):** read `references/stateful-search.md`, then build a bounded,
 **heuristic-only** read/write graph to prioritize deeper source inspection. Save artefacts in the
 private run, not the target checkout:
 
@@ -125,7 +134,7 @@ Independent readings can improve recall, but repeated agents can also repeat one
 the budget. Record their unique coverage and candidates; use held-out backtests to decide whether
 doubling a lens is worth its added cost.
 
-**Choose the lenses.** There are eighteen; running all of them on every target wastes the budget.
+**Choose the lenses.** There are nineteen; running all of them on every target wastes the budget.
 `passes.md` has a selection table by protocol shape. Two run on nearly everything:
 `privileged-path`, because access control and initialization are the categories automated reviewers
 measurably miss most and the largest real losses came from them, and `coverage-gap`, because the
@@ -148,6 +157,12 @@ pass that skipped `bundle` handed its lenses less than they needed. The groups a
 highest-yield mechanism lenses) and `config` (`live-reality`, `upgrade`); add `--lens anchor-account`
 for Solana or Rust. Where budget allows, dispatch each mechanism lens **twice in independent
 contexts** — the cheapest recall increase available.
+
+**Impact-first selection:** For large value at risk, start with
+`bundle --lens high-impact`: impact-first, privileged-path, business-logic,
+economics and composition. When a compiler graph is available, attach
+`--include <run>/impact-paths.json` if its size allows. Do not pretend a
+static path demonstrates a High/Critical.
 
 **Budgeted lens selection:** `bundle --lens recommended` selects up to six prioritized
 lenses using *manifest hints* from `stack_route.py`; this is a starting shortlist,
@@ -217,6 +232,23 @@ For each survivor, build a minimal PoC from `templates/` against **unmodified** 
 pinned to a recorded block or a reproducible local deployment. Capture the command, tool versions,
 exit code, full log, assertions, initial and final state, and a negative control. Add a
 minimal-fix regression where feasible.
+
+**Bounded state-model counterexamples (0.9):** Author an evidence-backed,
+explicit finite JSON state model. Try both candidate and protected control:
+
+```sh
+python3 <skill-dir>/scripts/scenario_fuzz.py --model <run>/model.json \
+  --control <run>/control.json --depth 5 --out <run>/model-exploration.json
+python3 <skill-dir>/scripts/impact_feasibility.py --case <run>/impact-case.json \
+  --out <run>/impact-estimate.json
+```
+
+A found trace proves an issue only in the *investigator's model*, not deployed
+code. No-model-counterexample within bounds does not establish safety; cost
+calculations rely on supplied assumptions and do not establish severity.
+For pre-existing native property/fuzz tests, `native_fuzz_plan.py` creates
+unexecuted paired command plans (Foundry, Cargo, pytest, Go) for deliberate
+review and execution via the existing `scenario_runner.py`.
 
 **Optional native PoC scaffolding:** Generate deliberately failing candidate and control
 test skeletons for Solidity, native Rust, Python or Go from a source-anchored hypothesis:
@@ -302,7 +334,9 @@ alive again — checking that is one of the most productive things a second scan
 
 ## Measuring whether any of this works
 
-Nothing in this package is backed by a published benchmark, and the README says so. If the user
+No improvement in finding real High/Critical has yet been established by a
+published benchmark. This release has helper regression tests, not a measured
+rediscovery or acceptance gain. If the user
 wants a number rather than an argument, read `references/backtest.md` and run the blind protocol:
 hunt a revision whose real findings are already published, seal the output before the answers
 exist on disk, then count the rediscoveries.
@@ -313,6 +347,11 @@ python3 <skill-dir>/scripts/bounty.py backtest init --name <case> --repo <checko
 python3 <skill-dir>/scripts/bounty.py backtest seal  --case <case-dir> --run <run-dir>
 python3 <skill-dir>/scripts/bounty.py backtest score --case <case-dir>
 ```
+
+After independently sealing and scoring both versions on the same pinned
+cases, use `bench_compare.py --baseline baseline-scored.json --candidate
+candidate-scored.json`. It compares paired **High/Critical rediscovery
+counts** only; keep untouched holdouts and record equal model/time budgets.
 
 Never read the published findings before sealing — not even the titles. The harness refuses a case
 whose truth file was populated first, refuses a second seal, and voids a case whose sealed file

@@ -78,7 +78,7 @@ Alternatively, copy `skills/bounty-pilot` into your agent's supported skills dir
 | **Duplicate map first** | Burns surfaces published in known-issue lists, past audits and contest findings *before* the first pass, then matches candidates against them mechanically |
 | **Deployed-code verification** | Compares on-chain runtime bytecode with a local build, resolves EIP-1967/1822 proxy slots, pins one block per run, and separates `exact` from `partial` honestly |
 | **Live-constant checks** | Reads a hardcoded index, address, decimal or feed id against live chain state, because a constant is a claim about the outside world |
-| **Eight aimed lenses** | Hunts time, lineage, observability, aggregates, parameter authorization, persistence, live truth and the Solana account model |
+| **Nineteen aimed lenses** | Hunts time, lineage, observability, aggregates, parameter authorization, persistence, live truth and the Solana account model |
 | **Separated generation and refutation** | Hunt passes state claims at full strength; a later pass attacks each one against five triage gates plus a separate evidence check |
 | **Evidence requirements** | Verified findings need a reproducible PoC, negative control, impact numbers and source-integrity evidence; every open lead needs a decisive next experiment |
 | **Submission gate** | Checks deployment, scope, severity, novelty, impact, objections and a fresh personal-history comparison before a report is ready |
@@ -100,9 +100,40 @@ Alternatively, copy `skills/bounty-pilot` into your agent's supported skills dir
 | 6. Novelty | Has someone already published this? | Cited sources, duplicate collisions |
 | 7. Deliver | What can we substantiate? | Private draft, limitations, next experiment |
 
+### Impact-first research workflow (0.9)
+
+The new `impact-first` lens starts at asset movements, debt, privilege and
+settlement sinks. `semantic_graph.py` uses Solidity compiler AST and Python
+AST, and `impact_paths.py` ranks upstream paths. `scenario_fuzz.py` explores
+bounded multi-actor **investigator-authored models**;
+`impact_feasibility.py` computes exact decimal economics from supplied
+assumptions; `native_fuzz_plan.py` prepares unexecuted, paired native
+test plans. `bench_compare.py` compares fully scored blind High/Critical
+rediscovery counts on identical pinned historical cases.
+
+```sh
+S=skills/bounty-pilot/scripts
+python3 $S/bounty.py impact-plan --solc /path/to/build-info.json --out private/run
+python3 $S/bounty.py bundle --repo /path/to/target --run private/run \
+  --lens high-impact --include private/run/impact-paths.json
+python3 $S/scenario_fuzz.py --model private/run/model.json \
+  --control private/run/control.json --depth 5
+python3 $S/impact_feasibility.py --case private/run/impact-case.json
+python3 $S/native_fuzz_plan.py --spec private/run/native-tests.json \
+  --stack foundry --out private/run/paired-plan.json
+```
+
+These produce review hints, model-only counterexamples, assumption-based
+estimates and **unexecuted** commands, not verified exploits. The semantic
+AST implementation supports Solidity and Python, **not native Rust IR**;
+Rust, Move, Cairo and CosmWasm retain stack-specific review/tests.
+No measured gain in High/Critical detection or payout has been established.
+See [the impact-first protocol](skills/bounty-pilot/references/impact-first.md)
+and [toy fixtures](skills/bounty-pilot/templates/high-impact/).
+
 ### Stateful, cross-stack logic hunting (0.8)
 
-Five additional *independent* discovery lenses focus on bugs that do not fit a named Solidity pattern:
+The 0.8 release added five *independent* discovery lenses focus on bugs that do not fit a named Solidity pattern:
 
 - `business-logic` reconstructs end-to-end promises and violations across multiple actions.
 - `temporal-logic` examines ordering, epoch boundaries, stale rights and lifecycle transitions.

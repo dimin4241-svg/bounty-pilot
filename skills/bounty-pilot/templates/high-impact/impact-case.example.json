@@ -1,0 +1,19 @@
+{
+  "id": "synthetic-case",
+  "currency": "USD",
+  "gross_extraction": "20",
+  "capital_required": "100",
+  "manipulation_cost": "2",
+  "transaction_fees": "1",
+  "slippage_cost": "0.5",
+  "gas_cost": "0.1",
+  "accessible_liquidity": "25",
+  "victim_at_risk": "30",
+  "source_revision": "not-real",
+  "evidence": {
+    "source": "synthetic example; replace with real pinned block and specs"
+  },
+  "capital_available_verified": false,
+  "real_chain_state_verified": false,
+  "unprivileged_reachability_verified": false
+}

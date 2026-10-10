@@ -28,7 +28,7 @@ post-audit delta.
 
 ## Choosing lenses — select by behavior and stack
 
-There are thirteen lenses. Running every one on every target wastes most of the budget on surfaces
+There are nineteen lenses. Running every one on every target wastes most of the budget on surfaces
 the protocol does not have. Pick by shape, and say in `coverage.md` which you chose and why.
 
 | Target shape | Run first | Then |
@@ -83,6 +83,16 @@ output, plus the `seam` lens over both passes' records.
 > contexts.** Do this selectively: count distinct mechanisms and new covered paths, not just model
 > agreement. Repeated contexts cost real budget and may be correlated. State the readings that ran
 > and what unique coverage each added.
+
+## Impact-first scanning (0.9)
+
+Use `bounty.py impact-plan --solc <compiler-output.json> --out <private-run>`
+to inspect compiler-resolved Solidity AST at the exact pinned revision.
+Python can use `--repo`. The result is a source-anchored **review queue**,
+not full semantic exploit proof. It cannot prove aliases, dynamic dispatch,
+modifiers, permissions or market impact. Follow with
+`bundle --lens high-impact`, then native PoCs and explicit economic values.
+See `references/impact-first.md`.
 
 ## Adaptive reading budget
 
