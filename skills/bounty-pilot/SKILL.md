@@ -125,7 +125,7 @@ Independent readings can improve recall, but repeated agents can also repeat one
 the budget. Record their unique coverage and candidates; use held-out backtests to decide whether
 doubling a lens is worth its added cost.
 
-**Choose the lenses.** There are thirteen; running all of them on every target wastes the budget.
+**Choose the lenses.** There are eighteen; running all of them on every target wastes the budget.
 `passes.md` has a selection table by protocol shape. Two run on nearly everything:
 `privileged-path`, because access control and initialization are the categories automated reviewers
 measurably miss most and the largest real losses came from them, and `coverage-gap`, because the
