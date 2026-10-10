@@ -1,0 +1,46 @@
+{
+  "invariants": [
+    {
+      "id": "solvent",
+      "kind": "compare",
+      "left": {
+        "path": "vault.assets"
+      },
+      "op": "ge",
+      "right": {
+        "path": "vault.liabilities"
+      },
+      "basis": "inferred: verify actual protocol solvency rules"
+    },
+    {
+      "id": "conservation",
+      "kind": "conservation",
+      "terms": [
+        {
+          "value": {
+            "path": "users.alice"
+          },
+          "weight": "1"
+        },
+        {
+          "value": {
+            "path": "users.bob"
+          },
+          "weight": "1"
+        }
+      ],
+      "expected": {
+        "path": "vault.assets"
+      },
+      "basis": "example only; real accounting may include fees and debt"
+    },
+    {
+      "id": "claim-uniqueness",
+      "kind": "unique",
+      "values": {
+        "path": "settled_claim_ids"
+      },
+      "basis": "example identity uniqueness check"
+    }
+  ]
+}

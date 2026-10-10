@@ -94,7 +94,21 @@ projects, map contracts, relayers, keepers, APIs, signers and recovery jobs as o
 stack has no dedicated lens, say so in `coverage.md` and do not translate EVM assumptions to it.
 
 Write `model.md`: state transitions, external assumptions, operational dependencies, and invariants
-with the source or specification that evidences each. Label inferred invariants as inferred. Keep
+with the source or specification that evidences each. Label inferred invariants as inferred.
+
+**Cross-stack state inventory (new):** read `references/stateful-search.md`, then build a bounded,
+**heuristic-only** read/write graph to prioritize deeper source inspection. Save artefacts in the
+private run, not the target checkout:
+
+```sh
+python3 <skill-dir>/scripts/stack_route.py --repo <checkout> --out <run>/stack-route.json
+python3 <skill-dir>/scripts/state_graph.py --repo <checkout> --out <run>/state-graph.json
+python3 <skill-dir>/scripts/coverage_graph.py --graph <run>/state-graph.json --out <run>/coverage-priority.json
+```
+
+Review the suggested edges against the original source before using them to generate scenarios.
+The graph is **not** a sound call graph, and its proposals do not imply reachability, unsafe
+behavior, or verification. The ranked list is only a queue for human/agent review. Keep
 build failures and incomplete history visible rather than tidy.
 
 ```sh
@@ -111,7 +125,7 @@ Independent readings can improve recall, but repeated agents can also repeat one
 the budget. Record their unique coverage and candidates; use held-out backtests to decide whether
 doubling a lens is worth its added cost.
 
-**Choose the lenses.** There are thirteen; running all of them on every target wastes the budget.
+**Choose the lenses.** There are eighteen; running all of them on every target wastes the budget.
 `passes.md` has a selection table by protocol shape. Two run on nearly everything:
 `privileged-path`, because access control and initialization are the categories automated reviewers
 measurably miss most and the largest real losses came from them, and `coverage-gap`, because the
@@ -134,6 +148,19 @@ pass that skipped `bundle` handed its lenses less than they needed. The groups a
 highest-yield mechanism lenses) and `config` (`live-reality`, `upgrade`); add `--lens anchor-account`
 for Solana or Rust. Where budget allows, dispatch each mechanism lens **twice in independent
 contexts** — the cheapest recall increase available.
+
+**Budgeted lens selection:** `bundle --lens recommended` selects up to six prioritized
+lenses using *manifest hints* from `stack_route.py`; this is a starting shortlist,
+not evidence of actual security coverage or measured bug yield. Record missing but
+applicable lenses in `coverage.md`, and override with explicit `--lens` when needed.
+
+**New, independent logic lenses.** Select `--lens logic` when multiple actions can change the
+same asset, privilege, reward or epoch, and `--lens cross-stack` when a keeper, relayer, signer,
+API or watcher shares a trust boundary with on-chain code. These groups produce distinct bundles
+for `business-logic`, `temporal-logic`, `composition`, `semantic-mismatch` and
+`recovery-failure`. Consult the runtime-specific procedures under `references/adapters/`.
+Do not run all lenses on every repository: select per protocol shape and coverage gaps, and retain
+all unvisited surfaces in `coverage.md`.
 
 Pass 2 repeats the mechanism lenses with `known-hypotheses.md` now in the bundle, so each hunts past
 its own earlier output, and adds `--lens seam` over both passes' records — including the demoted and
@@ -190,6 +217,36 @@ For each survivor, build a minimal PoC from `templates/` against **unmodified** 
 pinned to a recorded block or a reproducible local deployment. Capture the command, tool versions,
 exit code, full log, assertions, initial and final state, and a negative control. Add a
 minimal-fix regression where feasible.
+
+**Optional native PoC scaffolding:** Generate deliberately failing candidate and control
+test skeletons for Solidity, native Rust, Python or Go from a source-anchored hypothesis:
+
+```sh
+python3 <skill-dir>/scripts/poc_scaffold.py --finding <run>/hypothesis.json \
+  --stack rust --out-dir <run>/poc
+```
+
+Move, Cairo, CosmWasm and other ecosystems require native harnesses instead of
+pretending a generic Rust/Solidity test applies. Skeletons are never exploit evidence:
+fill realistic setup, reachable actions and both assertions first. Examples in `templates/stateful/`.
+
+**Optional data-only consistency checks and paired test execution:** define explicit, provenance-
+labelled predicates over captured JSON snapshots, then invoke:
+
+```sh
+python3 <skill-dir>/scripts/invariant_check.py --spec <run>/invariants.json \\
+  --snapshot <run>/snapshot.json --out <run>/invariant-results.json
+python3 <skill-dir>/scripts/scenario_runner.py --plan <run>/test-plan.json \\
+  --repo <disposable-checkout> --out <run>/scenario-dry-run.json
+# Only after reviewing each argv, using an isolated secret-free test environment:
+python3 <skill-dir>/scripts/scenario_runner.py --plan <run>/test-plan.json \\
+  --repo <disposable-checkout> --allow-exec --out <run>/scenario-results.json
+```
+
+The plan requires candidate and negative-control cases sharing a pair ID. The runner has no shell
+and starts in dry-run mode; both commands returning expected exit codes is **not** proof of exploit
+truth. Inspect the assertions and the unchanged target source. Never execute untrusted repo-supplied
+plans, access production keys, load-test live infrastructure or broadcast transactions.
 
 A passing test proves its assertions and nothing more. A revert is not a vulnerability. Never
 manufacture an exploit by granting the attacker privileges, replacing the component under test with

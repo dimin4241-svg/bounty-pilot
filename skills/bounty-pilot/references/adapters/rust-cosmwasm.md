@@ -1,0 +1,3 @@
+# CosmWasm / Rust adapter
+
+Identify CosmWasm version, network, execute/query/reply/migrate/Sudo entrypoints, stored contract version and chain-specific custom messages. Trace `info.sender`, `info.funds`, message authorization, reply IDs, submessage execution ordering, ReplyOn behavior, atomicity and error propagation. Check IBC packet sequence/acknowledgement/timeout, retries, idempotency, migration of existing state, Instantiate2 prediction and dynamic addresses where relevant. Validate native semantics with cw-multi-test (mock boundaries noted) plus actual chain integration tests where feasible; fuzz stateful sequences with bounded properties. A failed reply alone is not a permanent protocol failure. Prove shared-resource exhaustion or funds impact.

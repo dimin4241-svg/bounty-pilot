@@ -26,7 +26,7 @@ into `coverage.md` as a ranked reading order, and every later pass is given it. 
 evidenced baseline, say so and review in full — never call an arbitrary recent range the
 post-audit delta.
 
-## Choosing lenses — do not run all thirteen
+## Choosing lenses — select by behavior and stack
 
 There are thirteen lenses. Running every one on every target wastes most of the budget on surfaces
 the protocol does not have. Pick by shape, and say in `coverage.md` which you chose and why.
@@ -43,7 +43,11 @@ the protocol does not have. Pick by shape, and say in `coverage.md` which you ch
 | Governance / timelock / treasury | `privileged-path`, `upgrade` | `liveness`, `delta` |
 | Any fork of a known upstream | `upstream-diff`, `delta` | the shape's own row |
 | Any upgradeable deployment | `upgrade`, `privileged-path` | the shape's own row |
-| Solana / Anchor program | `anchor-account`, `privileged-path`, `economics` | `coverage-gap` |
+| Solana / Anchor program | `anchor-account`, `privileged-path`, `economics` | `business-logic`, `temporal-logic` |
+| Native Rust worker / keeper / bridge | `recovery-failure`, `semantic-mismatch`, `business-logic` | `temporal-logic`, `composition` |
+| Move / Cairo / CosmWasm | `business-logic`, `temporal-logic`, `privileged-path` | `composition`, stack-native adapter |
+| Cross-language relayer + contracts | `semantic-mismatch`, `recovery-failure`, `integration-auth` | `composition`, `coverage-gap` |
+| Go / Python / TypeScript backend | `privileged-path`, `recovery-failure`, `business-logic` | `semantic-mismatch`, `composition` |
 
 Two lenses run on essentially every target, because their yield does not depend on the protocol's
 shape: **`privileged-path`** (access control and initialization are the categories automated
@@ -79,6 +83,28 @@ output, plus the `seam` lens over both passes' records.
 > contexts.** Do this selectively: count distinct mechanisms and new covered paths, not just model
 > agreement. Repeated contexts cost real budget and may be correlated. State the readings that ran
 > and what unique coverage each added.
+
+## Adaptive reading budget
+
+Use `python3 <skill-dir>/scripts/stack_route.py --repo <checkout>` to produce a conservative
+runtime inventory and a six-lens shortlist, or `bounty.py bundle --lens recommended` for
+bundled independent contexts. The priority is an unvalidated heuristic based on manifests,
+not the probability of real vulnerabilities. Track unique surfaces and mechanisms after
+passes; stop duplicating a lens if its new coverage is zero. Override automatically chosen
+lenses when target facts warrant it, and document omitted necessary analyses.
+
+## Independent stateful logic discovery
+
+Use `--lens logic` for `business-logic`, `temporal-logic`, and `composition`.
+These independently inspect source, even when earlier lenses produced **zero** candidates.
+Use `--lens cross-stack` for `semantic-mismatch` and `recovery-failure` whenever
+multiple runtimes or asynchronous components participate. Apply adapter guidance
+(`adapters/`) for the **actual** runtime. `seam` remains a separate recombination
+pass over earlier records; it does not replace independent composition search.
+
+Avoid exploding the budget: after the initial ranked pass, choose the single most plausible
+hypothesis and attempt its cheapest decisive native test before duplicating readings.
+The lexical `state_graph.py` output can guide selection but is not a reachability graph.
 
 ## Stage C — Seams
 

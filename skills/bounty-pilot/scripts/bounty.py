@@ -69,6 +69,15 @@ REQUIRED = ('id', 'title', 'status', 'severity', 'bug_class', 'revision', 'root_
             'rejection_reason')
 
 
+def load_stack_route():
+    """Load bundled manifest router; its output is always heuristic."""
+    path = Path(__file__).resolve().parent / 'stack_route.py'
+    spec = importlib.util.spec_from_file_location('bp_stack_route', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def load_keccak():
     path = Path(__file__).resolve().parent / 'keccak.py'
     spec = importlib.util.spec_from_file_location('bp_keccak', path)
@@ -1008,7 +1017,8 @@ def delta(repo, since, scope_prefixes=None, limit=40):
 
 LENSES = ('delta', 'upstream-diff', 'coverage-gap', 'privileged-path', 'accounting',
           'integration-auth', 'external-call', 'economics', 'liveness', 'upgrade',
-          'live-reality', 'anchor-account', 'seam')
+          'live-reality', 'anchor-account', 'seam', 'business-logic',
+          'temporal-logic', 'recovery-failure', 'semantic-mismatch', 'composition')
 TRIAGE = 'triage'
 AIM_LENSES = ('delta', 'upstream-diff', 'coverage-gap')
 # The six highest-yield mechanism lenses. privileged-path leads because access control and
@@ -1017,6 +1027,8 @@ AIM_LENSES = ('delta', 'upstream-diff', 'coverage-gap')
 ATTACK_LENSES = ('privileged-path', 'accounting', 'integration-auth', 'external-call',
                  'economics', 'liveness')
 CONFIG_LENSES = ('live-reality', 'upgrade')
+LOGIC_LENSES = ('business-logic', 'temporal-logic', 'composition')
+CROSS_STACK_LENSES = ('semantic-mismatch', 'recovery-failure')
 BUNDLE_WARN_BYTES = 400_000
 
 BUNDLE_HEADER = """# Hunt bundle: {lens}
@@ -1208,6 +1220,7 @@ def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
     root = Path(git(repo, 'rev-parse', '--show-toplevel').strip()).resolve()
     commit = git(root, 'rev-parse', 'HEAD').strip()
     references = SKILL_ROOT / 'references'
+    routed = load_stack_route().route(root)
     chosen = []
     for lens in lenses:
         if lens == 'all':
@@ -1218,11 +1231,17 @@ def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
             chosen.extend(ATTACK_LENSES)
         elif lens == 'config':
             chosen.extend(CONFIG_LENSES)
+        elif lens == 'logic':
+            chosen.extend(LOGIC_LENSES)
+        elif lens == 'cross-stack':
+            chosen.extend(CROSS_STACK_LENSES)
+        elif lens == 'recommended':
+            chosen.extend(routed['prioritization']['selected'])
         elif lens in LENSES or lens == TRIAGE:
             chosen.append(lens)
         else:
             raise ValueError(f'unknown lens {lens!r}; choose from ' + ', '.join(LENSES)
-                             + f', {TRIAGE}, or the groups aim / attack / config / all')
+                             + f', {TRIAGE}, or the groups aim / attack / config / logic / cross-stack / recommended / all')
     chosen = list(dict.fromkeys(chosen))
     for lens in chosen:
         source_file = (references / f'{TRIAGE}.md' if lens == TRIAGE
@@ -1262,7 +1281,7 @@ def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
                      if config_omitted else '') + configs)
 
     context = []
-    for name in ('scope.md', 'dup-map.json', 'known-hypotheses.md'):
+    for name in ('scope.md', 'model.md', 'coverage.md', 'dup-map.json', 'known-hypotheses.md'):
         path = run / name
         if path.is_file() and path.stat().st_size > 0:
             body = path.read_text(encoding='utf-8')
@@ -1321,12 +1340,21 @@ def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
         if sop:
             pieces.append(sop)
         pieces += [shared, lens_text]
+        if lens in LOGIC_LENSES + CROSS_STACK_LENSES + ('anchor-account',):
+            guide = references / 'stateful-search.md'
+            if guide.is_file():
+                pieces.append(guide.read_text(encoding='utf-8'))
+            for selected_stack in routed['stacks']:
+                adapter = references / selected_stack['adapter']
+                if adapter.is_file():
+                    pieces.append('# Adapter for ' + selected_stack['stack'] + '\n\n'
+                                  + adapter.read_text(encoding='utf-8'))
         # The ladder tells the lens how far to escalate; the precedents make a candidate concrete
         # and much harder for triage to call theoretical.
         for extra in (impact, patterns):
             if extra:
                 pieces.append(extra)
-        if lens == 'seam' and findings_doc:
+        if lens in ('seam', 'composition') and findings_doc:
             pieces.append(findings_doc.replace('Attack these. Nothing here is established.',
                                                'The earlier passes produced these. Cross them.'))
         if context_doc:
@@ -1334,7 +1362,7 @@ def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
         if config_doc:
             pieces.append(config_doc)
         pieces.append(source_doc)
-        if lens == 'coverage-gap':
+        if lens in ('coverage-gap', 'business-logic', 'temporal-logic', 'composition'):
             pieces.append(tests_doc)
         pieces.append(BUNDLE_FOOTER.format(lens=lens, target=root.name, commit=commit))
         path = out / f'{lens}-bundle.md'
@@ -1355,6 +1383,7 @@ def bundle(repo, run, lenses, scope_prefixes=None, includes=None):
         notes.append(f'{len(config_skipped)} configuration file(s) unreadable and omitted: '
                      + ', '.join(config_skipped[:5]))
     return {'target': str(root), 'commit': commit, 'run': str(run),
+            'detected_stacks_heuristic': [x['stack'] for x in routed['stacks']],
             'in_scope_files': len(in_scope), 'test_files_bundled_for_coverage_gap': len(test_paths),
             'test_files_omitted': len(tests_omitted),
             'config_files_bundled': len(config_paths) - len(config_skipped),
@@ -2392,10 +2421,13 @@ def build_parser():
     bnd.add_argument('--repo', required=True)
     bnd.add_argument('--run', required=True)
     bnd.add_argument('--lens', action='append', required=True,
-                     help='lens name, or a group: aim, attack, all. Repeatable.')
+                     help='lens name, or a group: aim, attack, config, logic, cross-stack, recommended, all. Repeatable.')
     bnd.add_argument('--scope', action='append', default=None, help='path prefix to keep')
     bnd.add_argument('--include', action='append', default=None,
                      help='extra context file to append, e.g. a delta ranking. Repeatable.')
+
+    route_parser = sub.add_parser('route', help='recommend native adapters from tracked manifests (heuristic)')
+    route_parser.add_argument('--repo', required=True)
 
     score = sub.add_parser('score-target', help='prioritise a target from code and program facts')
     score.add_argument('--repo', required=True)
@@ -2495,6 +2527,9 @@ def main(argv=None):
         if args.action == 'bundle':
             print(json.dumps(bundle(args.repo, args.run, args.lens, args.scope,
                                     args.include), indent=2))
+            return 0
+        if args.action == 'route':
+            print(json.dumps(load_stack_route().route(args.repo), indent=2))
             return 0
         if args.action == 'score-target':
             print(json.dumps(score_target(args.repo, args.program), indent=2))

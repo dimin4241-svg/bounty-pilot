@@ -6,6 +6,19 @@ Select an adapter from manifests, build files, deployment artifacts and source; 
 from one file extension. If a project mixes stacks, route each component separately and add a seam
 pass across their trust boundary.
 
+## Native adapter procedures
+
+Start with `python3 <skill-dir>/scripts/stack_route.py --repo <checkout>` to generate a
+conservative manifest-based shortlist, then confirm the real runtime. `bounty.py route --repo
+<checkout>` prints the same data. Logic bundles include detected adapter instructions.
+
+Read the matching files in `adapters/`: `rust-native.md`, `rust-solana.md`,
+`rust-cosmwasm.md`, `move.md`, `cairo.md`, `go.md`, or `web-backend.md`.
+Do this **in addition to** the basic workflow, not instead of scope, evidence and triage.
+A Cargo.toml alone does not mean Solana: distinguish the exact VM/framework and mixed
+native worker crates. When a repository has multiple runtimes, run targeted checks
+for each and add `semantic-mismatch` and `recovery-failure` across the boundary.
+
 ## Built-in routing
 
 | Component | Read | Emphasize | Evidence path |
